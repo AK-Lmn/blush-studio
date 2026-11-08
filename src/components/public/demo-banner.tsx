@@ -9,7 +9,7 @@ export function DemoBanner() {
         <div className="flex items-center justify-center gap-1.5">
           <Sparkles className="w-3.5 h-3.5 text-rose shrink-0" aria-hidden="true" />
           <span className="text-muted-foreground">
-            <strong className="font-semibold text-foreground">Interactive Demo:</strong> Blush Studio is a fictional showcase salon developed by <span className="font-medium text-foreground">Veltwo Studio</span>. No actual payments or appointments.
+            <strong className="font-semibold text-foreground">Interactive Demo:</strong> Blush Studio is a fictional showcase salon developed by <a href="https://www.facebook.com/veltwo/" target="_blank" rel="noopener noreferrer" className="font-medium text-foreground hover:text-rose underline underline-offset-2 decoration-border hover:decoration-rose transition-colors">Veltwo Studio</a>. No actual payments or appointments.
           </span>
         </div>
         <div className="flex items-center gap-3">

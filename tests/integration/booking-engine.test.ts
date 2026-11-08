@@ -80,8 +80,13 @@ describe('Booking Engine Integration Tests', () => {
   });
 
   it('prevents double-booking / rejects overlapping appointments', async () => {
-    // Attempt to book the exact same slot that was just confirmed
-    const slots = await getAvailableSlots(testServiceId, testStaffId, futureDateStr);
+    // Pick another future date to ensure pristine availability
+    const testDate = new Date();
+    testDate.setDate(testDate.getDate() + 8);
+    const testDateStr = testDate.toISOString().slice(0, 10);
+
+    const slots = await getAvailableSlots(testServiceId, testStaffId, testDateStr);
+    expect(slots.length).toBeGreaterThan(0);
 
     // Pick an available slot
     const slotToBook = slots[0];
@@ -91,7 +96,7 @@ describe('Booking Engine Integration Tests', () => {
     const firstResult = await createBooking({
       serviceId: testServiceId,
       staffId: testStaffId,
-      date: futureDateStr,
+      date: testDateStr,
       time: slotToBook,
       customer: {
         firstName: 'First',
@@ -106,7 +111,7 @@ describe('Booking Engine Integration Tests', () => {
     const conflictResult = await createBooking({
       serviceId: testServiceId,
       staffId: testStaffId,
-      date: futureDateStr,
+      date: testDateStr,
       time: slotToBook,
       customer: {
         firstName: 'Conflicting',

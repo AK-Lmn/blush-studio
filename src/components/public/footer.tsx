@@ -1,7 +1,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { Logo } from './logo';
-import { Clock, MapPin, Phone, Mail, MessageCircle, Heart, Camera } from 'lucide-react';
+import { Clock, MapPin, Phone, Mail, MessageCircle, Camera } from 'lucide-react';
 
 export function Footer() {
   return (
@@ -116,10 +116,16 @@ export function Footer() {
         {/* Bottom Attribution & Legal */}
         <div className="mt-12 pt-6 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-muted-foreground">
           <p>© {new Date().getFullYear()} Blush Studio Philippines. Fictional demo environment.</p>
-          <div className="flex items-center gap-2">
-            <span>Crafted with</span>
-            <Heart className="w-3.5 h-3.5 text-rose fill-rose" />
-            <span>Demo experience by <strong className="font-medium text-foreground">Veltwo Studio</strong></span>
+          <div className="flex items-center gap-1.5">
+            <span>Demo experience crafted by</span>
+            <a
+              href="https://www.facebook.com/veltwo/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-foreground hover:text-rose transition-colors underline underline-offset-4 decoration-border hover:decoration-rose"
+            >
+              Veltwo Studio
+            </a>
           </div>
         </div>
       </div>
