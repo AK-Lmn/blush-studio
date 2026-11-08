@@ -1,7 +1,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { Logo } from './logo';
-import { Clock, MapPin, Phone, Mail, MessageCircle, Camera } from 'lucide-react';
+import { Clock, MapPin, Phone, Mail, Camera } from 'lucide-react';
 
 export function Footer() {
   return (
@@ -23,15 +23,6 @@ export function Footer() {
                 aria-label="Instagram"
               >
                 <Camera className="w-4 h-4" />
-              </a>
-              <a
-                href="https://m.me/blushstudio.ph.demo"
-                target="_blank"
-                rel="noreferrer"
-                className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center text-foreground hover:bg-accent/40 transition-colors"
-                aria-label="Facebook Messenger"
-              >
-                <MessageCircle className="w-4 h-4" />
               </a>
             </div>
           </div>

@@ -443,16 +443,6 @@ export default async function HomePage() {
                   Book an Appointment
                 </Link>
               </Button>
-              <Button variant="outline" size="lg" asChild>
-                <a
-                  href="https://m.me/blushstudio.ph.demo"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-2"
-                >
-                  <span>Chat on Messenger</span>
-                </a>
-              </Button>
             </div>
           </div>
         </div>
