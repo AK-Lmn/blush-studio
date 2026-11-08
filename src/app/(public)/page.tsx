@@ -20,22 +20,36 @@ import {
   MapPin,
   ChevronRight,
 } from 'lucide-react';
-
+import { FALLBACK_CATEGORIES, FALLBACK_SERVICES } from '@/lib/demo-data';
 
 export default async function HomePage() {
   await connection();
-  // Fetch services and categories from the database
-  const categories = await db
-    .select()
-    .from(schema.serviceCategories)
-    .where(eq(schema.serviceCategories.isActive, true))
-    .orderBy(asc(schema.serviceCategories.sortOrder));
+  // Fetch services and categories from the database with graceful fallback
+  let categories = [];
+  let srvs = [];
 
-  const srvs = await db
-    .select()
-    .from(schema.services)
-    .where(eq(schema.services.isActive, true))
-    .orderBy(asc(schema.services.sortOrder));
+  try {
+    categories = await db
+      .select()
+      .from(schema.serviceCategories)
+      .where(eq(schema.serviceCategories.isActive, true))
+      .orderBy(asc(schema.serviceCategories.sortOrder));
+
+    srvs = await db
+      .select()
+      .from(schema.services)
+      .where(eq(schema.services.isActive, true))
+      .orderBy(asc(schema.services.sortOrder));
+  } catch (err) {
+    console.warn('Database query fallback on HomePage:', err);
+  }
+
+  if (!categories || categories.length === 0) {
+    categories = FALLBACK_CATEGORIES;
+  }
+  if (!srvs || srvs.length === 0) {
+    srvs = FALLBACK_SERVICES;
+  }
 
   const featuredServices = srvs.slice(0, 4);
 

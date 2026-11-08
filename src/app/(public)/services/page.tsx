@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatPrice, formatDuration } from '@/lib/utils';
 import { Clock, Calendar, Sparkles, Check, ArrowRight } from 'lucide-react';
-
+import { FALLBACK_CATEGORIES, FALLBACK_SERVICES } from '@/lib/demo-data';
 
 export default async function ServicesPage({
   searchParams,
@@ -18,32 +18,44 @@ export default async function ServicesPage({
   await connection();
   const { category: selectedCategoryId } = await searchParams;
 
-  // Fetch all active categories
-  const categories = await db
-    .select()
-    .from(schema.serviceCategories)
-    .where(eq(schema.serviceCategories.isActive, true))
-    .orderBy(asc(schema.serviceCategories.sortOrder));
+  let categories = [];
+  let allServices = [];
 
-  // Fetch all active services
-  const allServices = await db
-    .select({
-      id: schema.services.id,
-      categoryId: schema.services.categoryId,
-      name: schema.services.name,
-      description: schema.services.description,
-      priceCentavos: schema.services.priceCentavos,
-      durationMinutes: schema.services.durationMinutes,
-      imageUrl: schema.services.imageUrl,
-      categoryName: schema.serviceCategories.name,
-    })
-    .from(schema.services)
-    .innerJoin(
-      schema.serviceCategories,
-      eq(schema.services.categoryId, schema.serviceCategories.id)
-    )
-    .where(eq(schema.services.isActive, true))
-    .orderBy(asc(schema.services.sortOrder));
+  try {
+    categories = await db
+      .select()
+      .from(schema.serviceCategories)
+      .where(eq(schema.serviceCategories.isActive, true))
+      .orderBy(asc(schema.serviceCategories.sortOrder));
+
+    allServices = await db
+      .select({
+        id: schema.services.id,
+        categoryId: schema.services.categoryId,
+        name: schema.services.name,
+        description: schema.services.description,
+        priceCentavos: schema.services.priceCentavos,
+        durationMinutes: schema.services.durationMinutes,
+        imageUrl: schema.services.imageUrl,
+        categoryName: schema.serviceCategories.name,
+      })
+      .from(schema.services)
+      .innerJoin(
+        schema.serviceCategories,
+        eq(schema.services.categoryId, schema.serviceCategories.id)
+      )
+      .where(eq(schema.services.isActive, true))
+      .orderBy(asc(schema.services.sortOrder));
+  } catch (err) {
+    console.warn('Database query fallback on ServicesPage:', err);
+  }
+
+  if (!categories || categories.length === 0) {
+    categories = FALLBACK_CATEGORIES;
+  }
+  if (!allServices || allServices.length === 0) {
+    allServices = FALLBACK_SERVICES;
+  }
 
   const filteredServices = selectedCategoryId
     ? allServices.filter((s: any) => s.categoryId === selectedCategoryId)

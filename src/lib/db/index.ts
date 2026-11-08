@@ -5,6 +5,37 @@ import os from 'os';
 
 let dbInstance: any;
 
+function createMockDb() {
+  const chain: any = {
+    from: () => chain,
+    where: () => chain,
+    orderBy: () => chain,
+    limit: () => chain,
+    offset: () => chain,
+    innerJoin: () => chain,
+    leftJoin: () => chain,
+    rightJoin: () => chain,
+    returning: () => Promise.resolve([]),
+    values: () => chain,
+    set: () => chain,
+    then: (resolve: any, reject: any) => Promise.resolve([]).then(resolve, reject),
+    catch: (reject: any) => Promise.resolve([]).catch(reject),
+  };
+
+  return {
+    select: () => chain,
+    insert: () => chain,
+    update: () => chain,
+    delete: () => chain,
+    transaction: async (cb: any) => cb(createMockDb()),
+    query: {
+      findFirst: () => Promise.resolve(null),
+      findMany: () => Promise.resolve([]),
+    },
+    $client: {},
+  };
+}
+
 function initDatabase() {
   let url = process.env.DATABASE_URL;
 
@@ -22,6 +53,15 @@ function initDatabase() {
       }
     }
   } catch {}
+
+  // If in production/Vercel without a real PostgreSQL URL, do not attempt to boot PGlite WASM
+  const isPostgresUrl = url && (url.startsWith('postgres://') || url.startsWith('postgresql://'));
+  if (process.env.VERCEL || (process.env.NODE_ENV === 'production' && !isPostgresUrl)) {
+    if (!isPostgresUrl) {
+      console.warn('DATABASE_URL is not set on Vercel. Using fallback mock database.');
+      return createMockDb();
+    }
+  }
 
   url = url || 'pglite://./data/blush_studio_pg';
 
@@ -41,42 +81,49 @@ function initDatabase() {
       const client = postgres(url, {
         max: 10,
         idle_timeout: 20,
-        connect_timeout: 5,
+        connect_timeout: 10,
+        prepare: false,
       });
       return drizzle(client, { schema });
     } catch (err) {
-      console.warn('Failed to connect to PostgreSQL via postgres-js, falling back to PGlite:', err);
+      console.warn('Failed to connect to PostgreSQL via postgres-js:', err);
+      if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+        return createMockDb();
+      }
     }
   }
 
-  // Fallback to embedded PostgreSQL via PGlite
-  const { PGlite } = require('@electric-sql/pglite');
-  const { drizzle } = require('drizzle-orm/pglite');
+  // Fallback to embedded PostgreSQL via PGlite for local development
+  try {
+    const { PGlite } = require('@electric-sql/pglite');
+    const { drizzle } = require('drizzle-orm/pglite');
 
-  // Store local database in LOCALAPPDATA to avoid OneDrive file locking on Windows
-  // Use a dedicated folder for Vitest so test runs never collide with the active dev server
-  const folderName = process.env.VITEST ? 'blush_studio_test_pg' : 'blush_studio_pg';
-  const resolvedPath = process.env.LOCALAPPDATA
-    ? path.join(process.env.LOCALAPPDATA, folderName)
-    : path.join(os.homedir(), `.${folderName}`);
+    const folderName = process.env.VITEST ? 'blush_studio_test_pg' : 'blush_studio_pg';
+    const baseDir = process.env.LOCALAPPDATA || (process.env.VERCEL ? '/tmp' : os.homedir());
+    const resolvedPath = path.join(baseDir, folderName);
 
-  if (!fs.existsSync(resolvedPath)) {
-    fs.mkdirSync(resolvedPath, { recursive: true });
+    if (!fs.existsSync(resolvedPath)) {
+      try {
+        fs.mkdirSync(resolvedPath, { recursive: true });
+      } catch {}
+    }
+
+    // Use global to preserve PGlite instance across Next.js HMR in development
+    const globalForDb = globalThis as unknown as {
+      pgliteInstance?: any;
+      dbInstance?: any;
+    };
+
+    if (!globalForDb.pgliteInstance) {
+      globalForDb.pgliteInstance = new PGlite(resolvedPath);
+      globalForDb.dbInstance = drizzle(globalForDb.pgliteInstance, { schema });
+    }
+
+    return globalForDb.dbInstance;
+  } catch (err) {
+    console.warn('PGlite fallback unavailable:', err);
+    return createMockDb();
   }
-
-  // Use global to preserve PGlite instance across Next.js HMR in development
-  const globalForDb = globalThis as unknown as {
-    pgliteInstance?: any;
-    dbInstance?: any;
-  };
-
-  if (!globalForDb.pgliteInstance) {
-    globalForDb.pgliteInstance = new PGlite(resolvedPath);
-    globalForDb.dbInstance = drizzle(globalForDb.pgliteInstance, { schema });
-
-  }
-
-  return globalForDb.dbInstance;
 }
 
 export async function migrateSchema() {
