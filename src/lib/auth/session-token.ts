@@ -92,19 +92,19 @@ export function verifyVisitorId(signedValue: string): string | null {
 /**
  * Single source of truth for resolving visitor identity across the application:
  * - Valid signed cookie -> verifies signature, extracts and returns the raw visitor ID.
- * - Legacy or pre-existing raw 'vst_' cookie -> adopts the raw ID and signs it so identity is preserved seamlessly.
- * - Missing, tampered, forged, or invalid cookie -> generates a fresh raw ID and signs it.
+ * - Missing, unsigned, invalid, tampered, or forged cookie -> strictly rejects it and generates a fresh secure identity.
  *
  * Ensures:
- * 1. Database column `appointments.visitor_id` (varchar 64) ONLY receives rawId (<= 40 chars).
- * 2. Client cookies ALWAYS store the HMAC-SHA256 signed value.
- * 3. Lookup and admin dashboard queries always compare rawId against rawId.
+ * 1. Prevents visitor impersonation: unsigned client cookies are never adopted or trusted.
+ * 2. Database column `appointments.visitor_id` (varchar 64) ONLY receives rawId (<= 40 chars).
+ * 3. Client cookies ALWAYS store the HMAC-SHA256 signed value.
+ * 4. Lookup and admin dashboard queries always compare rawId against rawId.
  */
 export function resolveVisitorIdentity(cookieValue?: string | null): VisitorIdentity {
   if (cookieValue && typeof cookieValue === 'string') {
     const trimmed = cookieValue.trim();
 
-    // 1. Valid signed cookie (<rawId>.<signature>)
+    // 1. Strictly require a valid HMAC-SHA256 signed cookie (<rawId>.<signature>)
     const verified = verifyVisitorId(trimmed);
     if (verified) {
       return {
@@ -113,20 +113,10 @@ export function resolveVisitorIdentity(cookieValue?: string | null): VisitorIden
         isNew: false,
       };
     }
-
-    // 2. Unsigned legacy or client-generated 'vst_' cookie without signature
-    // Adopt the raw ID so existing user bookings aren't lost when upgrading to signed format
-    if (trimmed.startsWith('vst_') && !trimmed.includes('.') && trimmed.length <= 64) {
-      const signed = signVisitorId(trimmed);
-      return {
-        rawId: trimmed,
-        signedCookie: signed,
-        isNew: true, // Needs cookie update on client
-      };
-    }
+    // Reject unsigned legacy/client 'vst_' strings without adopting them to prevent impersonation
   }
 
-  // 3. Missing, tampered, or invalid: generate fresh identity
+  // 2. Missing, unsigned, invalid, or tampered cookie: generate fresh secure identity
   const rawId = `vst_${crypto.randomUUID()}`;
   const signedCookie = signVisitorId(rawId);
   return {

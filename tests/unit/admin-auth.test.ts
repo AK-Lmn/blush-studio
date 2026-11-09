@@ -185,15 +185,16 @@ describe('Admin Authentication & Security Tests', () => {
       expect(identity.rawId.length).toBeLessThanOrEqual(64);
     });
 
-    it('adopts and upgrades unsigned legacy vst_ cookies without losing identity', () => {
-      const legacyRaw = 'vst_99887766-5544-3322-1100-aabbccddeeff';
-      const identity = resolveVisitorIdentity(legacyRaw);
+    it('rejects unsigned vst_ cookies and generates a fresh secure identity (prevents impersonation)', () => {
+      const unsignedRaw = 'vst_99887766-5544-3322-1100-aabbccddeeff';
+      const identity = resolveVisitorIdentity(unsignedRaw);
 
-      expect(identity.rawId).toBe(legacyRaw);
+      // Must NOT adopt the unsigned raw ID to prevent visitor impersonation
+      expect(identity.rawId).not.toBe(unsignedRaw);
+      expect(identity.rawId).toMatch(/^vst_[0-9a-f-]{36}$/);
       expect(identity.signedCookie).toContain('.');
-      expect(identity.signedCookie.startsWith(legacyRaw)).toBe(true);
       expect(identity.isNew).toBe(true); // Needs Set-Cookie update
-      expect(verifyVisitorId(identity.signedCookie)).toBe(legacyRaw);
+      expect(verifyVisitorId(identity.signedCookie)).toBe(identity.rawId);
     });
 
     it('generates secure fresh signed identity when cookie is missing or forged', () => {

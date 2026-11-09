@@ -12,8 +12,13 @@ if (!process.env.VERCEL && process.env.NODE_ENV !== 'production') {
   } catch {}
 }
 
+export { assertDatabaseIsolation, checkDatabaseIsolation } from './safety';
+
 function getDatabaseUrl(): string | undefined {
-  let url = process.env.DATABASE_URL;
+  // Support dedicated test database or Neon test branch in test environments
+  let url = (process.env.PLAYWRIGHT_TEST || process.env.NODE_ENV === 'test')
+    ? (process.env.TEST_DATABASE_URL || process.env.DATABASE_URL)
+    : (process.env.DATABASE_URL || process.env.TEST_DATABASE_URL);
 
   // In local development only, inspect .env.local if not already injected
   if (!url && !process.env.VERCEL && process.env.NODE_ENV !== 'production') {
@@ -21,7 +26,10 @@ function getDatabaseUrl(): string | undefined {
       const envLocalPath = path.resolve(process.cwd(), '.env.local');
       if (fs.existsSync(envLocalPath)) {
         const envContent = fs.readFileSync(envLocalPath, 'utf8');
-        const match = envContent.match(/^DATABASE_URL=(.*)$/m);
+        const testMatch = (process.env.PLAYWRIGHT_TEST || process.env.NODE_ENV === 'test')
+          ? envContent.match(/^TEST_DATABASE_URL=(.*)$/m)
+          : null;
+        const match = testMatch || envContent.match(/^DATABASE_URL=(.*)$/m);
         if (match && match[1]) {
           const parsed = match[1].trim();
           if (parsed && !parsed.startsWith('#')) {

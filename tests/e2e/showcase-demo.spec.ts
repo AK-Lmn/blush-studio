@@ -1,15 +1,25 @@
 import { test, expect } from '@playwright/test';
-import { db } from '../../src/lib/db';
+import { db, assertDatabaseIsolation } from '../../src/lib/db';
 import * as schema from '../../src/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 
 test.describe('Blush Studio — Showcase Customer & Management Journey', () => {
   let refVisitor1: string = '';
   let refVisitor2: string = '';
+  const testCreatedReferences: string[] = [];
 
   test.beforeAll(async () => {
-    // Clean lingering test bookings so future test slots are completely open
-    await db.delete(schema.appointments).where(eq(schema.appointments.isDemoSeed, false));
+    // 1. Mandatory Safety Guard: require dedicated test database or Neon test branch; prevent running against production
+    assertDatabaseIsolation();
+  });
+
+  test.afterAll(async () => {
+    // 2. Safe Targeted Cleanup: delete ONLY appointments created by this test run
+    if (testCreatedReferences.length > 0) {
+      await db
+        .delete(schema.appointments)
+        .where(inArray(schema.appointments.referenceNumber, testCreatedReferences));
+    }
   });
 
   test('Sequence 1: Booking BEFORE Dashboard Access (Visitor 1)', async ({ browser }) => {
@@ -97,6 +107,7 @@ test.describe('Blush Studio — Showcase Customer & Management Journey', () => {
     await expect(refElement).toBeVisible();
     refVisitor1 = (await refElement.textContent())?.trim() || '';
     expect(refVisitor1).toMatch(/^BLS-\d{8}-[A-Z0-9]{4}$/);
+    if (refVisitor1) testCreatedReferences.push(refVisitor1);
 
     // 7. Verify cookie is cryptographically signed
     const cookies1 = await context1.cookies();
@@ -202,6 +213,7 @@ test.describe('Blush Studio — Showcase Customer & Management Journey', () => {
     refVisitor2 = (await refElement.textContent())?.trim() || '';
     expect(refVisitor2).toMatch(/^BLS-\d{8}-[A-Z0-9]{4}$/);
     expect(refVisitor2).not.toEqual(refVisitor1);
+    if (refVisitor2) testCreatedReferences.push(refVisitor2);
 
     // 3. Lookup page verification for Visitor 2
     await page2.goto(`/booking/${refVisitor2}`);

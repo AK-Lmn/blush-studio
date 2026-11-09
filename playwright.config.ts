@@ -19,6 +19,10 @@ export default defineConfig({
     port: 3000,
     reuseExistingServer: true,
     timeout: 30000,
+    env: {
+      ...process.env,
+      PLAYWRIGHT_TEST: 'true',
+    },
   },
   projects: [
     {
