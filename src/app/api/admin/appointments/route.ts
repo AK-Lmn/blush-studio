@@ -38,13 +38,22 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Appointment not found' }, { status: 404 });
     }
 
-    // Multi-visitor isolation: Demo Managers can only mutate their own demo bookings or shared demo seed records
+    // Multi-visitor isolation & baseline protection:
+    // Demo Managers cannot modify shared seed appointments or appointments belonging to another visitor session.
     if (session.role === 'demo_manager') {
-      const isOwner = existing.visitorId === session.visitorId;
-      const isSeed = existing.isDemoSeed === true;
-      if (!isOwner && !isSeed) {
+      if (existing.isDemoSeed) {
         return NextResponse.json(
-          { error: 'Access denied: you cannot modify bookings from another demonstration session' },
+          {
+            error:
+              'Shared sample appointments are protected in public demo mode. To test editing appointments, book an appointment through the website or add a walk-in, then edit your own booking.',
+          },
+          { status: 403 }
+        );
+      }
+
+      if (existing.visitorId !== session.visitorId) {
+        return NextResponse.json(
+          { error: 'Access denied: you cannot modify bookings from another demonstration session.' },
           { status: 403 }
         );
       }

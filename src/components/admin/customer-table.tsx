@@ -47,7 +47,10 @@ export function CustomerTable({
         body: JSON.stringify(editingCustomer),
       });
 
-      if (!res.ok) throw new Error('Failed to update client');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to update client');
+      }
 
       setCustomers((prev) =>
         prev.map((c) => (c.id === editingCustomer.id ? editingCustomer : c))

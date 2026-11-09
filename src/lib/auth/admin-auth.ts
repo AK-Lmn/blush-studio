@@ -7,6 +7,8 @@ import { verifyPassword } from './password';
 import {
   signSessionToken,
   verifySessionToken,
+  signVisitorId,
+  verifyVisitorId,
   SessionPayload,
 } from './session-token';
 import crypto from 'crypto';
@@ -24,18 +26,24 @@ export interface AdminUser {
 
 /**
  * Retrieves the current visitor ID from cookie or generates a new one.
+ * Uses HMAC-SHA256 signatures to prevent client-side visitor ID spoofing.
  */
 export async function getVisitorId(): Promise<string> {
   try {
     const cookieStore = await cookies();
     const existing = cookieStore.get(VISITOR_COOKIE_NAME)?.value;
-    if (existing && existing.startsWith('vst_')) {
-      return existing;
+    if (existing) {
+      const verifiedId = verifyVisitorId(existing);
+      if (verifiedId) {
+        return verifiedId;
+      }
     }
 
-    const newId = `vst_${crypto.randomUUID()}`;
+    const rawId = `vst_${crypto.randomUUID()}`;
+    const signedValue = signVisitorId(rawId);
+
     try {
-      cookieStore.set(VISITOR_COOKIE_NAME, newId, {
+      cookieStore.set(VISITOR_COOKIE_NAME, signedValue, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
@@ -45,7 +53,7 @@ export async function getVisitorId(): Promise<string> {
     } catch {
       // If called in context where response cookies cannot be modified, return generated ID
     }
-    return newId;
+    return rawId;
   } catch {
     return `vst_test_${crypto.randomUUID()}`;
   }

@@ -362,10 +362,8 @@ export async function createBooking(
   try {
     const result = await db.transaction(async (tx: any) => {
       // Concurrency lock: postgres advisory lock per staff+date
-      try {
+      if (!process.env.VITEST) {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
-      } catch {
-        // Advisory locks might not be supported in mock/in-memory test adapters
       }
 
       // 1. Verify service exists and is active
@@ -413,7 +411,112 @@ export async function createBooking(
       const startTime = createManilaDateTime(input.date, input.time);
       const endTime = addMinutes(startTime, service.durationMinutes);
 
-      // 5. Verify the slot is available (re-check inside transaction)
+      // 5. Verify business hours
+      const [year, month, day] = input.date.split('-').map(Number);
+      const dateObj = new Date(year, month - 1, day);
+      const dayName = getDayOfWeek(dateObj);
+
+      const [bizHours] = await tx
+        .select()
+        .from(businessHours)
+        .where(eq(businessHours.dayOfWeek, dayName as any));
+
+      if (!bizHours || bizHours.isClosed) {
+        return { success: false, error: 'The salon is closed on this day' };
+      }
+
+      // 6. Verify staff is scheduled to work on this day
+      const [staffSched] = await tx
+        .select()
+        .from(staffSchedules)
+        .where(
+          and(
+            eq(staffSchedules.staffId, input.staffId),
+            eq(staffSchedules.dayOfWeek, dayName as any),
+            eq(staffSchedules.isActive, true)
+          )
+        );
+
+      if (!staffSched) {
+        return {
+          success: false,
+          error: `${staffMember.firstName} is not scheduled to work on this day`,
+        };
+      }
+
+      // 7. Verify staff is not on leave / unavailable
+      const dayStart = createManilaDateTime(input.date, '00:00');
+      const dayEnd = createManilaDateTime(input.date, '23:59');
+
+      const unavailable = await tx
+        .select()
+        .from(staffUnavailable)
+        .where(
+          and(
+            eq(staffUnavailable.staffId, input.staffId),
+            lte(staffUnavailable.startDate, dayEnd),
+            gte(staffUnavailable.endDate, dayStart)
+          )
+        );
+
+      if (unavailable.length > 0) {
+        return {
+          success: false,
+          error: `${staffMember.firstName} is unavailable or on leave on this date`,
+        };
+      }
+
+      // 8. Verify appointment fits entirely within working hours window
+      const bizOpen = parseTime(bizHours.openTime);
+      const bizClose = parseTime(bizHours.closeTime);
+      const staffStart = parseTime(staffSched.startTime);
+      const staffEnd = parseTime(staffSched.endTime);
+
+      const windowStartMinutes = Math.max(
+        bizOpen.hours * 60 + bizOpen.minutes,
+        staffStart.hours * 60 + staffStart.minutes
+      );
+      const windowEndMinutes = Math.min(
+        bizClose.hours * 60 + bizClose.minutes,
+        staffEnd.hours * 60 + staffEnd.minutes
+      );
+
+      const apptStartParsed = parseTime(input.time);
+      const apptStartMinutes = apptStartParsed.hours * 60 + apptStartParsed.minutes;
+      const apptEndMinutes = apptStartMinutes + service.durationMinutes;
+
+      if (apptStartMinutes < windowStartMinutes || apptEndMinutes > windowEndMinutes) {
+        return {
+          success: false,
+          error: 'The requested appointment falls outside active working hours',
+        };
+      }
+
+      // 9. Booking horizon & advance booking constraints
+      const now = new Date();
+      if (!input.isWalkIn) {
+        const minAdvanceHours = settings?.minAdvanceBookingHours ?? 2;
+        const minBookingTime = addMinutes(now, minAdvanceHours * 60);
+
+        if (startTime < minBookingTime) {
+          return {
+            success: false,
+            error: `Appointments must be booked at least ${minAdvanceHours} hours in advance`,
+          };
+        }
+
+        const maxAdvanceDays = settings?.maxAdvanceBookingDays ?? 30;
+        const maxBookingTime = addMinutes(now, maxAdvanceDays * 24 * 60);
+
+        if (startTime > maxBookingTime) {
+          return {
+            success: false,
+            error: `Appointments cannot be booked more than ${maxAdvanceDays} days in advance`,
+          };
+        }
+      }
+
+      // 10. Verify no conflicting appointments exist for this staff member (with buffers)
       const startWithBuffer = addMinutes(startTime, -buffer);
       const endWithBuffer = addMinutes(endTime, buffer);
 
@@ -434,34 +537,6 @@ export async function createBooking(
           success: false,
           error: 'This time slot is no longer available. Please select another time.',
         };
-      }
-
-      // 6. Verify business hours
-      const [year, month, day] = input.date.split('-').map(Number);
-      const dateObj = new Date(year, month - 1, day);
-      const dayName = getDayOfWeek(dateObj);
-
-      const [bizHours] = await tx
-        .select()
-        .from(businessHours)
-        .where(eq(businessHours.dayOfWeek, dayName as any));
-
-      if (!bizHours || bizHours.isClosed) {
-        return { success: false, error: 'The salon is closed on this day' };
-      }
-
-      // 7. Check minimum advance booking (for public online bookings)
-      if (!input.isWalkIn) {
-        const now = new Date();
-        const minAdvanceHours = settings?.minAdvanceBookingHours ?? 2;
-        const minBookingTime = addMinutes(now, minAdvanceHours * 60);
-
-        if (startTime < minBookingTime) {
-          return {
-            success: false,
-            error: `Appointments must be booked at least ${minAdvanceHours} hours in advance`,
-          };
-        }
       }
 
       // 8. Find or create customer

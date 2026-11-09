@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -160,6 +161,24 @@ export function BookingWizard({
 
     loadSlots();
   }, [selectedService, selectedStaff, noPreference, selectedDate, availableStaff]);
+
+  // Autofill fictional demo customer information
+  const handleFillDemoCustomer = () => {
+    const firstNames = ['Sofia', 'Isabella', 'Bea', 'Chloe', 'Nicole', 'Kylie'];
+    const lastNames = ['Mendoza', 'Valdez', 'Reyes', 'Santos', 'Aquino', 'Villanueva'];
+    const randomFirst = firstNames[Math.floor(Math.random() * firstNames.length)];
+    const randomLast = lastNames[Math.floor(Math.random() * lastNames.length)];
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const generatedPhone = `0917555${randomSuffix}`;
+    const generatedEmail = `${randomFirst.toLowerCase()}.${randomLast.toLowerCase()}${randomSuffix}@blushdemo.ph`;
+
+    setFirstName(randomFirst);
+    setLastName(randomLast);
+    setPhone(generatedPhone);
+    setEmail(generatedEmail);
+    setNotes('Mindful treatment requested (interactive showcase demo booking).');
+    toast.info('Demo guest details autofilled');
+  };
 
   // Handle Final Booking Submission
   const handleConfirmBooking = async () => {
@@ -575,6 +594,29 @@ export function BookingWizard({
             </p>
           </div>
 
+          {/* Quick Demo Customer Autofill Banner */}
+          <div className="p-4 rounded-xl bg-secondary/70 border border-rose/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+            <div className="space-y-0.5 text-left">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                <Sparkles className="w-3.5 h-3.5 text-rose shrink-0" />
+                <span>Visiting as a prospective client?</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Skip typing personal details. Click to autofill safe, realistic demonstration guest info.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="blush"
+              size="sm"
+              onClick={handleFillDemoCustomer}
+              className="shrink-0 gap-1.5 text-xs font-semibold h-8.5 px-3.5"
+            >
+              <User className="w-3.5 h-3.5" />
+              <span>Use Demo Customer</span>
+            </Button>
+          </div>
+
           <div className="bg-card rounded-2xl border border-border p-6 space-y-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
@@ -833,26 +875,33 @@ export function BookingWizard({
             </span>
           </div>
 
-          <div className="text-xs text-muted-foreground max-w-md mx-auto space-y-1">
-            <p>
-              A reminder with studio directions will be sent to <strong>{phone}</strong>.
+          <div className="p-4 rounded-xl bg-secondary/50 border border-border text-xs text-muted-foreground max-w-md mx-auto space-y-2 text-center">
+            <p className="font-semibold text-foreground">
+              ✨ Fictional Portfolio Demonstration
             </p>
             <p>
-              Please arrive 10 minutes prior to your scheduled slot to enjoy complimentary tea in our private lounge.
+              This is an interactive showcase built by Veltwo Studio. No real appointment or payment will be processed.
+            </p>
+            <p className="text-[11px]">
+              You can now look up your booking details or log into the Admin Portal as Demo Manager to see your reservation appear live on the appointment schedule.
             </p>
           </div>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-4 border-t border-border">
             <Button variant="outline" asChild>
-              <a
-                href={`https://m.me/blushstudio.ph.demo?text=Hi!%20I%20have%20an%20appointment%20with%20reference%20${confirmedBooking.referenceNumber}`}
-                target="_blank"
-                rel="noreferrer"
+              <Link
+                href={`/booking/${confirmedBooking.referenceNumber}`}
                 className="flex items-center gap-2"
               >
-                <MessageCircle className="w-4 h-4 text-rose" />
-                <span>Contact via Messenger</span>
-              </a>
+                <CalendarIcon className="w-4 h-4 text-rose" />
+                <span>View Booking Details</span>
+              </Link>
+            </Button>
+            <Button variant="outline" asChild>
+              <Link href="/admin/login" className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-rose" />
+                <span>Explore in Admin Portal</span>
+              </Link>
             </Button>
             <Button
               variant="blush"

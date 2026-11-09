@@ -72,12 +72,6 @@ export default function AdminLoginPage() {
     }
   };
 
-  const fillDemoCredentials = () => {
-    setEmail('admin@blushstudio.demo');
-    setPassword('BlushDemo2024!');
-    toast.info('Demo credentials populated');
-  };
-
   return (
     <div className="min-h-screen flex flex-col justify-center items-center px-4 bg-background selection:bg-accent selection:text-foreground">
       <div className="w-full max-w-md space-y-8">
@@ -175,19 +169,6 @@ export default function AdminLoginPage() {
               )}
             </Button>
           </form>
-
-          {/* Quick Demo Credentials Autofill */}
-          <div className="pt-3 border-t border-border flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Pre-filled credentials:</span>
-            <button
-              type="button"
-              onClick={fillDemoCredentials}
-              className="text-rose hover:underline font-semibold flex items-center gap-1"
-            >
-              <Sparkles className="w-3 h-3" />
-              <span>Fill Admin Email & Key</span>
-            </button>
-          </div>
         </div>
 
         <div className="text-center">

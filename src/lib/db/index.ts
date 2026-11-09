@@ -4,29 +4,33 @@ import fs from 'fs';
 import os from 'os';
 import { config as dotenvConfig } from 'dotenv';
 
-// Load environment variables immediately in local environments
-try {
-  dotenvConfig({ path: path.resolve(process.cwd(), '.env.local') });
-  dotenvConfig({ path: path.resolve(process.cwd(), '.env') });
-} catch {}
+// Load environment variables strictly in local development environments (never in Vercel serverless production)
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'production') {
+  try {
+    dotenvConfig({ path: path.resolve(process.cwd(), '.env.local') });
+    dotenvConfig({ path: path.resolve(process.cwd(), '.env') });
+  } catch {}
+}
 
 function getDatabaseUrl(): string | undefined {
   let url = process.env.DATABASE_URL;
 
-  // Read .env.local dynamically if present so runtime picks up active config
-  try {
-    const envLocalPath = path.resolve(process.cwd(), '.env.local');
-    if (fs.existsSync(envLocalPath)) {
-      const envContent = fs.readFileSync(envLocalPath, 'utf8');
-      const match = envContent.match(/^DATABASE_URL=(.*)$/m);
-      if (match && match[1]) {
-        const parsed = match[1].trim();
-        if (parsed && !parsed.startsWith('#')) {
-          url = parsed;
+  // In local development only, inspect .env.local if not already injected
+  if (!url && !process.env.VERCEL && process.env.NODE_ENV !== 'production') {
+    try {
+      const envLocalPath = path.resolve(process.cwd(), '.env.local');
+      if (fs.existsSync(envLocalPath)) {
+        const envContent = fs.readFileSync(envLocalPath, 'utf8');
+        const match = envContent.match(/^DATABASE_URL=(.*)$/m);
+        if (match && match[1]) {
+          const parsed = match[1].trim();
+          if (parsed && !parsed.startsWith('#')) {
+            url = parsed;
+          }
         }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   // Strip surrounding quotes if present
   if (url) {

@@ -9,6 +9,8 @@ import {
 import {
   signSessionToken,
   verifySessionToken,
+  signVisitorId,
+  verifyVisitorId,
   SessionPayload,
 } from '@/lib/auth/session-token';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
@@ -140,5 +142,33 @@ describe('Admin Authentication & Security Tests', () => {
     // Demo user has restricted SQL filter scoping to demo seed + their visitorId
     const demoCondition = getAppointmentScopeCondition(demoUser);
     expect(demoCondition).toBeDefined();
+  });
+
+  it('cryptographically signs and verifies visitor IDs to prevent cookie spoofing', () => {
+    const rawVisitorId = 'vst_12345678-abcd-ef01-2345-6789abcdef01';
+    const signed = signVisitorId(rawVisitorId);
+
+    expect(signed).toContain('.');
+    expect(signed.startsWith(rawVisitorId)).toBe(true);
+
+    const verified = verifyVisitorId(signed);
+    expect(verified).toBe(rawVisitorId);
+  });
+
+  it('strictly rejects forged or un-signed client-supplied visitor IDs', () => {
+    // 1. Raw un-signed visitor ID (typical spoofing attempt)
+    expect(verifyVisitorId('vst_victim_account_uuid')).toBeNull();
+
+    // 2. Tampered visitor ID with mismatched signature
+    const validRaw = 'vst_legitimate_visitor_uuid';
+    const signed = signVisitorId(validRaw);
+    const [, validSig] = signed.split('.');
+    const forged = `vst_impersonated_victim_uuid.${validSig}`;
+
+    expect(verifyVisitorId(forged)).toBeNull();
+
+    // 3. Random invalid format
+    expect(verifyVisitorId('malformed_cookie_string')).toBeNull();
+    expect(verifyVisitorId('')).toBeNull();
   });
 });

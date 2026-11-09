@@ -532,10 +532,12 @@ async function runSeed() {
   });
 
   console.log('✨ Blush Studio Database Seeding Complete!');
-  console.log('---');
-  console.log(`Demo Admin Login: ${adminEmail}`);
-  console.log(`Demo Admin Password: ${adminPassword}`);
-  console.log('---');
+  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    console.log('---');
+    console.log(`Development Admin Login: ${adminEmail}`);
+    console.log(`Development Admin Password: [CONFIGURED_IN_ENV_OR_FIXTURE]`);
+    console.log('---');
+  }
 }
 
 runSeed()

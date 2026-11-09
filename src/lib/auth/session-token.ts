@@ -9,14 +9,24 @@ export interface SessionPayload {
   expiresAt: number;
 }
 
-const DEFAULT_SECRET = 'blush-studio-demo-production-auth-secret-32-chars-long-taguig';
-
 function getAuthSecret(): string {
-  const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET || DEFAULT_SECRET;
-  if (secret.length < 32) {
-    throw new Error('Authentication secret must be at least 32 characters long');
+  const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET;
+  if (secret) {
+    if (secret.length < 32) {
+      throw new Error('[Security Error] BETTER_AUTH_SECRET must be at least 32 characters long');
+    }
+    return secret;
   }
-  return secret;
+
+  // In production or Vercel deployment, strictly fail safely without predictable fallbacks
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+    throw new Error(
+      '[Security Error] BETTER_AUTH_SECRET or AUTH_SECRET environment variable is required in production. Configured secret must be at least 32 characters long.'
+    );
+  }
+
+  // Strictly in local unit test / dev environment only
+  return 'blush_dev_fixture_signing_secret_for_vitest_min_32_chars';
 }
 
 /**
@@ -24,6 +34,50 @@ function getAuthSecret(): string {
  */
 function createSignature(data: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(data).digest('base64url');
+}
+
+/**
+ * Cryptographically signs a visitor ID using HMAC-SHA256.
+ * Format: <rawVisitorId>.<signature>
+ */
+export function signVisitorId(visitorId: string): string {
+  const secret = getAuthSecret();
+  const signature = createSignature(visitorId, secret);
+  return `${visitorId}.${signature}`;
+}
+
+/**
+ * Verifies the cryptographic HMAC-SHA256 signature on a visitor ID.
+ * Returns the verified visitor ID string, or null if tampered, forged, or missing.
+ */
+export function verifyVisitorId(signedValue: string): string | null {
+  if (!signedValue || typeof signedValue !== 'string') return null;
+
+  const parts = signedValue.split('.');
+  if (parts.length !== 2) return null;
+
+  const [rawId, signature] = parts;
+  if (!rawId || !signature || !rawId.startsWith('vst_')) return null;
+
+  try {
+    const secret = getAuthSecret();
+    const expectedSignature = createSignature(rawId, secret);
+
+    const sigBuffer = Buffer.from(signature);
+    const expectedBuffer = Buffer.from(expectedSignature);
+
+    if (sigBuffer.length !== expectedBuffer.length) {
+      return null;
+    }
+
+    if (!crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+      return null;
+    }
+
+    return rawId;
+  } catch {
+    return null;
+  }
 }
 
 /**

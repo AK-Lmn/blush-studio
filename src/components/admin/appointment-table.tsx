@@ -91,7 +91,10 @@ export function AppointmentTable({
         body: JSON.stringify({ id, status: newStatus }),
       });
 
-      if (!res.ok) throw new Error('Status update failed');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Status update failed');
+      }
 
       setAppointments((prev) =>
         prev.map((a) => (a.id === id ? { ...a, status: newStatus } : a))
@@ -114,7 +117,10 @@ export function AppointmentTable({
         body: JSON.stringify({ id, paymentStatus: newPaymentStatus }),
       });
 
-      if (!res.ok) throw new Error('Payment status update failed');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Payment status update failed');
+      }
 
       setAppointments((prev) =>
         prev.map((a) => (a.id === id ? { ...a, paymentStatus: newPaymentStatus } : a))

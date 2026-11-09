@@ -25,6 +25,9 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
   }
 
   beforeAll(async () => {
+    // 0. Clean any lingering visitor test bookings from previous runs
+    await db.delete(schema.appointments).where(eq(schema.appointments.isDemoSeed, false));
+
     // 1. Pick first available active service
     const [service] = await db
       .select()
@@ -211,5 +214,47 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
     // Exactly one booking must succeed, and all others must fail
     expect(successCount).toBe(1);
     expect(failureCount).toBe(4);
+  });
+
+  it('authoritatively rejects booking outside active working hours', async () => {
+    const validDateStr = getSafeWorkingDay(5);
+
+    // 04:00 AM is well before salon opening time (09:00 AM)
+    const earlyResult = await createBooking({
+      serviceId: testServiceId,
+      staffId: testStaffId,
+      date: validDateStr,
+      time: '04:00',
+      customer: {
+        firstName: 'Night',
+        lastName: 'Owl',
+        phone: '09179998877',
+      },
+    });
+
+    expect(earlyResult.success).toBe(false);
+    expect(earlyResult.error).toContain('outside active working hours');
+  });
+
+  it('authoritatively rejects booking beyond maximum advance booking window', async () => {
+    const farFuture = new Date();
+    farFuture.setDate(farFuture.getDate() + 90); // 90 days ahead (> 30 days)
+    if (farFuture.getDay() === 0) farFuture.setDate(farFuture.getDate() + 1);
+    const farDateStr = farFuture.toISOString().slice(0, 10);
+
+    const result = await createBooking({
+      serviceId: testServiceId,
+      staffId: testStaffId,
+      date: farDateStr,
+      time: '14:00',
+      customer: {
+        firstName: 'Future',
+        lastName: 'Planner',
+        phone: '09179990000',
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('30 days in advance');
   });
 });
