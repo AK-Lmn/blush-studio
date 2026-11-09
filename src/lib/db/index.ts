@@ -15,10 +15,25 @@ if (!process.env.VERCEL && process.env.NODE_ENV !== 'production') {
 export { assertDatabaseIsolation, checkDatabaseIsolation } from './safety';
 
 function getDatabaseUrl(): string | undefined {
-  // Support dedicated test database or Neon test branch in test environments
-  let url = (process.env.PLAYWRIGHT_TEST || process.env.NODE_ENV === 'test')
-    ? (process.env.TEST_DATABASE_URL || process.env.DATABASE_URL)
-    : (process.env.DATABASE_URL || process.env.TEST_DATABASE_URL);
+  const isTestEnv = Boolean(process.env.PLAYWRIGHT_TEST || (process.env.NODE_ENV as string) === 'test');
+
+  // 1. In test environments (Playwright or test runner), strictly prioritize dedicated test database
+  if (isTestEnv) {
+    return process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+  }
+
+  // 2. In Vercel preview environments, strictly require PREVIEW_DATABASE_URL (never fall back to production)
+  if (process.env.VERCEL_ENV === 'preview') {
+    const previewUrl = process.env.PREVIEW_DATABASE_URL;
+    if (!previewUrl && (process.env.NODE_ENV === 'production' || process.env.VERCEL)) {
+      throw new Error(
+        '[Database Configuration Error] PREVIEW_DATABASE_URL is required for preview deployments. Configure PREVIEW_DATABASE_URL in Vercel project environment variables (scoped to Preview).'
+      );
+    }
+    return previewUrl;
+  }
+
+  let url = process.env.DATABASE_URL || process.env.PREVIEW_DATABASE_URL || process.env.TEST_DATABASE_URL;
 
   // In local development only, inspect .env.local if not already injected
   if (!url && !process.env.VERCEL && process.env.NODE_ENV !== 'production') {
@@ -26,7 +41,7 @@ function getDatabaseUrl(): string | undefined {
       const envLocalPath = path.resolve(process.cwd(), '.env.local');
       if (fs.existsSync(envLocalPath)) {
         const envContent = fs.readFileSync(envLocalPath, 'utf8');
-        const testMatch = (process.env.PLAYWRIGHT_TEST || process.env.NODE_ENV === 'test')
+        const testMatch = isTestEnv
           ? envContent.match(/^TEST_DATABASE_URL=(.*)$/m)
           : null;
         const match = testMatch || envContent.match(/^DATABASE_URL=(.*)$/m);
@@ -84,10 +99,11 @@ function initDatabase() {
     return drizzle(client, { schema });
   }
 
-  // 3. In production mode, require a valid database connection string (no silent mock proxies)
+  // 3. In cloud/Vercel mode, require a valid database connection string (no silent mock proxies)
   if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+    const varName = process.env.VERCEL_ENV === 'preview' ? 'PREVIEW_DATABASE_URL' : 'DATABASE_URL';
     throw new Error(
-      '[Database Configuration Error] DATABASE_URL is not set or invalid for production. Configure your Neon PostgreSQL connection string in environment variables.'
+      `[Database Configuration Error] ${varName} is not set or invalid for this deployment. Configure your Neon PostgreSQL connection string in Vercel environment variables.`
     );
   }
 

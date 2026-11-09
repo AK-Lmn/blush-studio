@@ -9,7 +9,7 @@ describe('Database Isolation & Safety Guard for Test Suites', () => {
   it('strictly rejects running tests when NODE_ENV is production', () => {
     const result = checkDatabaseIsolation(
       'postgresql://user:pass@localhost:5432/testdb',
-      { nodeEnv: 'production', allowUnsafe: false }
+      { nodeEnv: 'production' }
     );
 
     expect(result.isSafe).toBe(false);
@@ -41,7 +41,20 @@ describe('Database Isolation & Safety Guard for Test Suites', () => {
     expect(result.reason).toContain('No database URL configured');
   });
 
-  it('allows execution when explicit TEST_DATABASE_URL is provided', () => {
+  it('unconditionally rejects TEST_DATABASE_URL if it points to production', () => {
+    const prodUrl =
+      'postgresql://neondb_owner:secret@ep-long-sky-bezcntwa-pooler.c-9.us-east-2.aws.neon.tech/neondb';
+    const result = checkDatabaseIsolation(undefined, {
+      nodeEnv: 'test',
+      testDbUrl: prodUrl,
+    });
+
+    expect(result.isSafe).toBe(false);
+    expect(result.reason).toContain('Refusing to run tests against production database');
+    expect(result.reason).toContain('even if passed via TEST_DATABASE_URL');
+  });
+
+  it('allows execution when explicit TEST_DATABASE_URL is provided for an isolated test branch', () => {
     const testBranchUrl =
       'postgresql://neondb_owner:secret@ep-delicate-surf-be1b1s28.c-9.us-east-2.aws.neon.tech/neondb';
     const result = checkDatabaseIsolation('unused_default_url', {

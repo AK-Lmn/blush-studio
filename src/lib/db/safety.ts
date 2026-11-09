@@ -11,13 +11,13 @@ export interface DatabaseIsolationResult {
 
 export function checkDatabaseIsolation(
   dbUrl?: string,
-  env: { nodeEnv?: string; testDbUrl?: string; allowUnsafe?: boolean } = {}
+  env: { nodeEnv?: string; testDbUrl?: string } = {}
 ): DatabaseIsolationResult {
   const nodeEnv = env.nodeEnv ?? process.env.NODE_ENV;
   const testDbUrl = env.testDbUrl ?? process.env.TEST_DATABASE_URL;
-  const allowUnsafe = env.allowUnsafe ?? Boolean(process.env.ALLOW_UNSAFE_PRODUCTION_TESTS);
 
-  if (nodeEnv === 'production' && !allowUnsafe) {
+  // 1. Strict invariant: tests cannot run in production runtime environment
+  if (nodeEnv === 'production') {
     return {
       isSafe: false,
       reason: 'E2E tests cannot be executed when NODE_ENV=production.',
@@ -35,28 +35,41 @@ export function checkDatabaseIsolation(
     };
   }
 
+  const cleanUrl = targetUrl.replace(/:[^:@]+@/, '@'); // strip password before checking
+
   const prodIndicators = [
     'ep-long-sky-bezcntwa',
     'br-super-surf-be6vauzb',
     'demo-prod-one.vercel.app',
+    'branch=production',
+    '/production',
   ];
 
   const targetsProduction = prodIndicators.some((indicator) =>
-    targetUrl.toLowerCase().includes(indicator.toLowerCase())
+    cleanUrl.toLowerCase().includes(indicator.toLowerCase())
   );
 
-  const hasDedicatedTestTarget =
-    Boolean(testDbUrl) ||
-    targetUrl.includes('test') ||
-    targetUrl.includes('ep-delicate-surf') ||
-    targetUrl.includes('localhost') ||
-    targetUrl.includes('127.0.0.1') ||
-    targetUrl.includes('pglite');
-
-  if (targetsProduction && !hasDedicatedTestTarget) {
+  // UNCONDITIONAL REJECTION: Never allow tests against production under any circumstances
+  if (targetsProduction) {
     return {
       isSafe: false,
-      reason: `Refusing to run tests against production database (${targetUrl.split('@')[1]?.split('/')[0] || 'production'}). Configure a dedicated test database or Neon test branch via TEST_DATABASE_URL.`,
+      reason: `Refusing to run tests against production database (${cleanUrl.split('@')[1]?.split('/')[0] || 'production'}). Production databases are strictly forbidden in test suites, even if passed via TEST_DATABASE_URL.`,
+      target: targetUrl,
+    };
+  }
+
+  const isDedicatedTestTarget =
+    cleanUrl.includes('test') ||
+    cleanUrl.includes('ep-delicate-surf') ||
+    cleanUrl.includes('localhost') ||
+    cleanUrl.includes('127.0.0.1') ||
+    cleanUrl.includes('pglite') ||
+    Boolean(process.env.PLAYWRIGHT_TEST_DB);
+
+  if (!isDedicatedTestTarget) {
+    return {
+      isSafe: false,
+      reason: `Database target (${cleanUrl.split('@')[1]?.split('/')[0] || 'unknown'}) is not recognized as a dedicated test database or Neon test branch. Configure TEST_DATABASE_URL pointing to an isolated test branch (e.g. branch 'test' or localhost).`,
       target: targetUrl,
     };
   }
