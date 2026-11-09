@@ -2,44 +2,18 @@ import * as schema from './schema';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { config as dotenvConfig } from 'dotenv';
 
-let dbInstance: any;
+// Load environment variables immediately in local environments
+try {
+  dotenvConfig({ path: path.resolve(process.cwd(), '.env.local') });
+  dotenvConfig({ path: path.resolve(process.cwd(), '.env') });
+} catch {}
 
-function createMockDb() {
-  const chain: any = {
-    from: () => chain,
-    where: () => chain,
-    orderBy: () => chain,
-    limit: () => chain,
-    offset: () => chain,
-    innerJoin: () => chain,
-    leftJoin: () => chain,
-    rightJoin: () => chain,
-    returning: () => Promise.resolve([]),
-    values: () => chain,
-    set: () => chain,
-    then: (resolve: any, reject: any) => Promise.resolve([]).then(resolve, reject),
-    catch: (reject: any) => Promise.resolve([]).catch(reject),
-  };
-
-  return {
-    select: () => chain,
-    insert: () => chain,
-    update: () => chain,
-    delete: () => chain,
-    transaction: async (cb: any) => cb(createMockDb()),
-    query: {
-      findFirst: () => Promise.resolve(null),
-      findMany: () => Promise.resolve([]),
-    },
-    $client: {},
-  };
-}
-
-function initDatabase() {
+function getDatabaseUrl(): string | undefined {
   let url = process.env.DATABASE_URL;
 
-  // Read .env.local dynamically if present so HMR immediately picks up config changes
+  // Read .env.local dynamically if present so runtime picks up active config
   try {
     const envLocalPath = path.resolve(process.cwd(), '.env.local');
     if (fs.existsSync(envLocalPath)) {
@@ -54,82 +28,85 @@ function initDatabase() {
     }
   } catch {}
 
-  // If in production/Vercel without a real PostgreSQL URL, do not attempt to boot PGlite WASM
-  const isPostgresUrl = url && (url.startsWith('postgres://') || url.startsWith('postgresql://'));
-  if (process.env.VERCEL || (process.env.NODE_ENV === 'production' && !isPostgresUrl)) {
-    if (!isPostgresUrl) {
-      console.warn('DATABASE_URL is not set on Vercel. Using fallback mock database.');
-      return createMockDb();
-    }
+  // Strip surrounding quotes if present
+  if (url) {
+    url = url.replace(/^["']|["']$/g, '').trim();
   }
 
-  url = url || 'pglite://./data/blush_studio_pg';
+  return url;
+}
 
-  // If pointing to localhost:5432 without local Postgres daemon, fallback to embedded PGlite
-  if (
-    (url.includes('localhost:5432') || url.includes('127.0.0.1:5432')) &&
-    process.env.FORCE_POSTGRES !== 'true'
-  ) {
-    url = 'pglite://./data/blush_studio_pg';
-  }
+function initDatabase() {
+  const url = getDatabaseUrl();
 
-  if (url.startsWith('postgres://') || url.startsWith('postgresql://')) {
-    try {
-      const postgresModule = require('postgres');
-      const postgres = postgresModule.default || postgresModule;
-      const { drizzle } = require('drizzle-orm/postgres-js');
-      const client = postgres(url, {
-        max: 10,
-        idle_timeout: 20,
-        connect_timeout: 10,
-        prepare: false,
-      });
-      return drizzle(client, { schema });
-    } catch (err) {
-      console.warn('Failed to connect to PostgreSQL via postgres-js:', err);
-      if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
-        return createMockDb();
-      }
-    }
-  }
-
-  // Fallback to embedded PostgreSQL via PGlite for local development
-  try {
+  // 1. Vitest Test Environment Isolation: always use dedicated test PGlite
+  if (process.env.VITEST) {
     const { PGlite } = require('@electric-sql/pglite');
     const { drizzle } = require('drizzle-orm/pglite');
-
-    const folderName = process.env.VITEST ? 'blush_studio_test_pg' : 'blush_studio_pg';
-    const baseDir = process.env.LOCALAPPDATA || (process.env.VERCEL ? '/tmp' : os.homedir());
-    const resolvedPath = path.join(baseDir, folderName);
-
-    if (!fs.existsSync(resolvedPath)) {
-      try {
-        fs.mkdirSync(resolvedPath, { recursive: true });
-      } catch {}
+    const baseDir = process.env.LOCALAPPDATA || (os.platform() === 'win32' ? os.homedir() : '/tmp');
+    const testDir = path.join(baseDir, 'blush_studio_test_pg');
+    if (!fs.existsSync(testDir)) {
+      fs.mkdirSync(testDir, { recursive: true });
     }
-
-    // Use global to preserve PGlite instance across Next.js HMR in development
-    const globalForDb = globalThis as unknown as {
-      pgliteInstance?: any;
-      dbInstance?: any;
-    };
-
+    const globalForDb = globalThis as any;
     if (!globalForDb.pgliteInstance) {
-      globalForDb.pgliteInstance = new PGlite(resolvedPath);
+      globalForDb.pgliteInstance = new PGlite(testDir);
       globalForDb.dbInstance = drizzle(globalForDb.pgliteInstance, { schema });
     }
-
     return globalForDb.dbInstance;
-  } catch (err) {
-    console.warn('PGlite fallback unavailable:', err);
-    return createMockDb();
   }
+
+  // 2. Production / Cloud PostgreSQL Connection (Neon, Supabase, self-hosted)
+  if (url && (url.startsWith('postgres://') || url.startsWith('postgresql://'))) {
+    const postgresModule = require('postgres');
+    const postgres = postgresModule.default || postgresModule;
+    const { drizzle } = require('drizzle-orm/postgres-js');
+
+    const client = postgres(url, {
+      max: process.env.NODE_ENV === 'production' ? 10 : 5,
+      idle_timeout: 20,
+      connect_timeout: 10,
+      prepare: false, // Required for Neon / Supabase connection poolers
+    });
+
+    return drizzle(client, { schema });
+  }
+
+  // 3. In production mode, require a valid database connection string (no silent mock proxies)
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+    throw new Error(
+      '[Database Configuration Error] DATABASE_URL is not set or invalid for production. Configure your Neon PostgreSQL connection string in environment variables.'
+    );
+  }
+
+  // 4. Local Development Fallback: Embedded PGlite
+  const { PGlite } = require('@electric-sql/pglite');
+  const { drizzle } = require('drizzle-orm/pglite');
+
+  const baseDir = process.env.LOCALAPPDATA || (os.platform() === 'win32' ? os.homedir() : '/tmp');
+  const resolvedPath = path.join(baseDir, 'blush_studio_pg');
+
+  if (!fs.existsSync(resolvedPath)) {
+    fs.mkdirSync(resolvedPath, { recursive: true });
+  }
+
+  const globalForDb = globalThis as unknown as {
+    pgliteInstance?: any;
+    dbInstance?: any;
+  };
+
+  if (!globalForDb.pgliteInstance) {
+    globalForDb.pgliteInstance = new PGlite(resolvedPath);
+    globalForDb.dbInstance = drizzle(globalForDb.pgliteInstance, { schema });
+  }
+
+  return globalForDb.dbInstance;
 }
 
 export async function migrateSchema() {
   try {
     const globalForDb = globalThis as any;
-    if (!globalForDb.pgliteInstance) return;
+    if (!globalForDb?.pgliteInstance) return;
 
     await globalForDb.pgliteInstance.ready;
 

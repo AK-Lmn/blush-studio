@@ -1,12 +1,15 @@
 import React from 'react';
 import { db } from '@/lib/db';
 import * as schema from '@/lib/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, or } from 'drizzle-orm';
 import { CalendarView } from '@/components/admin/calendar-view';
-
+import { requireAdminSession, getAppointmentScopeCondition } from '@/lib/auth/admin-auth';
 
 export default async function AdminCalendarPage() {
-  const appointments = await db
+  const session = await requireAdminSession();
+  const scopeCondition = getAppointmentScopeCondition(session);
+
+  let query = db
     .select({
       id: schema.appointments.id,
       referenceNumber: schema.appointments.referenceNumber,
@@ -24,8 +27,11 @@ export default async function AdminCalendarPage() {
     .from(schema.appointments)
     .innerJoin(schema.customers, eq(schema.appointments.customerId, schema.customers.id))
     .innerJoin(schema.services, eq(schema.appointments.serviceId, schema.services.id))
-    .innerJoin(schema.staff, eq(schema.appointments.staffId, schema.staff.id))
-    .orderBy(desc(schema.appointments.startTime));
+    .innerJoin(schema.staff, eq(schema.appointments.staffId, schema.staff.id));
+
+  const appointments = scopeCondition
+    ? await query.where(scopeCondition).orderBy(desc(schema.appointments.startTime))
+    : await query.orderBy(desc(schema.appointments.startTime));
 
   const serialized = appointments.map((a: any) => ({
     ...a,

@@ -2,22 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAdminSession } from '@/lib/auth/admin-auth';
 import { db } from '@/lib/db';
 import * as schema from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
-import { generateReferenceNumber } from '@/lib/utils';
+import { eq, and, or } from 'drizzle-orm';
+import { createBooking } from '@/server/services/booking-engine';
 
-// Helper to require admin session on all admin mutations
+// Helper to require authenticated admin or demo manager session
 async function checkAuth() {
   const session = await getAdminSession();
   if (!session) {
-    return NextResponse.json({ error: 'Unauthorized admin access' }, { status: 401 });
+    return { error: NextResponse.json({ error: 'Unauthorized admin access' }, { status: 401 }), session: null };
   }
-  return null;
+  return { error: null, session };
 }
 
-// Update appointment (status, paymentStatus, adminNotes, reschedule)
+// Update appointment (status, paymentStatus, adminNotes)
 export async function PATCH(request: NextRequest) {
-  const authError = await checkAuth();
-  if (authError) return authError;
+  const { error: authError, session } = await checkAuth();
+  if (authError || !session) return authError;
 
   try {
     const body = await request.json();
@@ -25,6 +25,29 @@ export async function PATCH(request: NextRequest) {
 
     if (!id) {
       return NextResponse.json({ error: 'Appointment ID required' }, { status: 400 });
+    }
+
+    // Fetch existing appointment to verify access scope
+    const [existing] = await db
+      .select()
+      .from(schema.appointments)
+      .where(eq(schema.appointments.id, id))
+      .limit(1);
+
+    if (!existing) {
+      return NextResponse.json({ error: 'Appointment not found' }, { status: 404 });
+    }
+
+    // Multi-visitor isolation: Demo Managers can only mutate their own demo bookings or shared demo seed records
+    if (session.role === 'demo_manager') {
+      const isOwner = existing.visitorId === session.visitorId;
+      const isSeed = existing.isDemoSeed === true;
+      if (!isOwner && !isSeed) {
+        return NextResponse.json(
+          { error: 'Access denied: you cannot modify bookings from another demonstration session' },
+          { status: 403 }
+        );
+      }
     }
 
     const updates: any = { updatedAt: new Date() };
@@ -46,10 +69,10 @@ export async function PATCH(request: NextRequest) {
   }
 }
 
-// Create manual appointment / walk-in
+// Centralized manual appointment / walk-in creation using core booking engine
 export async function POST(request: NextRequest) {
-  const authError = await checkAuth();
-  if (authError) return authError;
+  const { error: authError, session } = await checkAuth();
+  if (authError || !session) return authError;
 
   try {
     const body = await request.json();
@@ -61,6 +84,7 @@ export async function POST(request: NextRequest) {
       customerFirstName,
       customerLastName,
       customerPhone,
+      customerEmail,
       isWalkIn = true,
       paymentMethod = 'cash',
       paymentStatus = 'paid',
@@ -68,60 +92,51 @@ export async function POST(request: NextRequest) {
       adminNotes,
     } = body;
 
-    // Get service price and duration
-    const [service] = await db
-      .select()
-      .from(schema.services)
-      .where(eq(schema.services.id, serviceId));
-
-    if (!service) {
-      return NextResponse.json({ error: 'Service not found' }, { status: 400 });
+    if (!serviceId || !staffId || !date || !time || !customerFirstName || !customerLastName || !customerPhone) {
+      return NextResponse.json(
+        { error: 'Missing required appointment fields (serviceId, staffId, date, time, customer details)' },
+        { status: 400 }
+      );
     }
 
-    // Find or create customer
-    const normalizedPhone = customerPhone.replace(/\D/g, '');
-    let [customer] = await db
-      .select()
-      .from(schema.customers)
-      .where(eq(schema.customers.phone, normalizedPhone));
+    // Delegate creation to centralized booking engine with concurrency and conflict checks
+    const result = await createBooking({
+      serviceId,
+      staffId,
+      date,
+      time,
+      customer: {
+        firstName: customerFirstName,
+        lastName: customerLastName,
+        phone: customerPhone,
+        email: customerEmail,
+        notes: adminNotes,
+      },
+      paymentMethod,
+      paymentStatus,
+      status,
+      isWalkIn: Boolean(isWalkIn),
+      adminNotes: adminNotes || 'Recorded by studio management',
+      visitorId: session.visitorId,
+    });
 
-    if (!customer) {
-      const [newCust] = await db
-        .insert(schema.customers)
-        .values({
-          firstName: customerFirstName,
-          lastName: customerLastName,
-          phone: normalizedPhone,
-        })
-        .returning();
-      customer = newCust;
+    if (!result.success) {
+      return NextResponse.json(
+        { error: result.error || 'Failed to record booking due to scheduling conflict' },
+        { status: 409 }
+      );
     }
 
-    // Time calculations
-    const startTime = new Date(`${date}T${time}:00+08:00`);
-    const endTime = new Date(startTime.getTime() + service.durationMinutes * 60 * 1000);
-
-    const referenceNumber = generateReferenceNumber();
-
-    const [appointment] = await db
-      .insert(schema.appointments)
-      .values({
-        referenceNumber,
-        customerId: customer.id,
-        serviceId,
-        staffId,
-        startTime,
-        endTime,
-        status,
-        paymentStatus,
-        paymentMethod,
-        priceCentavos: service.priceCentavos,
-        isWalkIn: Boolean(isWalkIn),
-        adminNotes: adminNotes || 'Recorded by studio administrator',
-      })
-      .returning();
-
-    return NextResponse.json({ success: true, appointment }, { status: 201 });
+    return NextResponse.json(
+      {
+        success: true,
+        appointment: {
+          id: result.appointmentId,
+          referenceNumber: result.referenceNumber,
+        },
+      },
+      { status: 201 }
+    );
   } catch (error: any) {
     console.error('Manual booking error:', error);
     return NextResponse.json({ error: 'Failed to record booking' }, { status: 500 });

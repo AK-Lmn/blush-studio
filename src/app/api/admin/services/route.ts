@@ -4,16 +4,25 @@ import { db } from '@/lib/db';
 import * as schema from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 
-async function checkAuth() {
+async function checkPrivilegedAuth() {
   const session = await getAdminSession();
   if (!session) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }), session: null };
   }
-  return null;
+  if (session.role !== 'admin') {
+    return {
+      error: NextResponse.json(
+        { error: 'Demo Mode: Baseline service catalog is protected against public modification.' },
+        { status: 403 }
+      ),
+      session,
+    };
+  }
+  return { error: null, session };
 }
 
 export async function POST(request: NextRequest) {
-  const authErr = await checkAuth();
+  const { error: authErr } = await checkPrivilegedAuth();
   if (authErr) return authErr;
 
   try {
@@ -44,7 +53,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const authErr = await checkAuth();
+  const { error: authErr } = await checkPrivilegedAuth();
   if (authErr) return authErr;
 
   try {

@@ -108,7 +108,7 @@ export function Footer() {
         <div className="mt-12 pt-6 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-muted-foreground">
           <p>© {new Date().getFullYear()} Blush Studio Philippines. Fictional demo environment.</p>
           <div className="flex items-center gap-1.5">
-            <span>Demo experience crafted by</span>
+            <span>Crafted with Demo experience by</span>
             <a
               href="https://www.facebook.com/veltwo/"
               target="_blank"

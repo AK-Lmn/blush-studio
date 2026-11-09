@@ -262,6 +262,10 @@ export const appointments = pgTable(
     customerNotes: text('customer_notes'),
     adminNotes: text('admin_notes'),
     isWalkIn: boolean('is_walk_in').notNull().default(false),
+    /** Scopes demo bookings created by public visitors so demo sessions are isolated */
+    visitorId: varchar('visitor_id', { length: 64 }),
+    /** Flags baseline demonstration seed records that cannot be permanently mutated by public users */
+    isDemoSeed: boolean('is_demo_seed').notNull().default(false),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -274,6 +278,8 @@ export const appointments = pgTable(
     index('appointment_customer_idx').on(table.customerId),
     index('appointment_status_idx').on(table.status),
     index('appointment_date_idx').on(table.startTime),
+    index('appointment_visitor_idx').on(table.visitorId),
+    index('appointment_demo_seed_idx').on(table.isDemoSeed),
   ]
 );
 

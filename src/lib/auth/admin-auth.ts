@@ -2,111 +2,213 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { db } from '@/lib/db';
 import * as schema from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, or, and } from 'drizzle-orm';
+import { verifyPassword } from './password';
+import {
+  signSessionToken,
+  verifySessionToken,
+  SessionPayload,
+} from './session-token';
+import crypto from 'crypto';
 
-const ADMIN_COOKIE_NAME = 'blush_admin_session';
+export const ADMIN_COOKIE_NAME = 'blush_admin_session';
+export const VISITOR_COOKIE_NAME = 'blush_visitor_id';
 
 export interface AdminUser {
   id: string;
   email: string;
   name: string;
-  role: string;
+  role: 'admin' | 'demo_manager';
+  visitorId: string;
 }
 
-export async function setAdminSession(user: AdminUser) {
-  const cookieStore = await cookies();
-  const sessionData = JSON.stringify({
-    ...user,
-    expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 7, // 7 days
-  });
-
-  // Base64 encode the session payload
-  const token = Buffer.from(sessionData).toString('base64');
-
-  cookieStore.set(ADMIN_COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 60 * 60 * 24 * 7,
-  });
-}
-
-export async function getAdminSession(): Promise<AdminUser | null> {
-  const cookieStore = await cookies();
-  const cookie = cookieStore.get(ADMIN_COOKIE_NAME);
-
-  if (!cookie?.value) return null;
-
+/**
+ * Retrieves the current visitor ID from cookie or generates a new one.
+ */
+export async function getVisitorId(): Promise<string> {
   try {
-    const raw = Buffer.from(cookie.value, 'base64').toString('utf8');
-    const data = JSON.parse(raw);
-
-    if (data.expiresAt && Date.now() > data.expiresAt) {
-      return null;
+    const cookieStore = await cookies();
+    const existing = cookieStore.get(VISITOR_COOKIE_NAME)?.value;
+    if (existing && existing.startsWith('vst_')) {
+      return existing;
     }
 
+    const newId = `vst_${crypto.randomUUID()}`;
+    try {
+      cookieStore.set(VISITOR_COOKIE_NAME, newId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 60 * 60 * 24 * 30, // 30 days
+      });
+    } catch {
+      // If called in context where response cookies cannot be modified, return generated ID
+    }
+    return newId;
+  } catch {
+    return `vst_test_${crypto.randomUUID()}`;
+  }
+}
+
+/**
+ * Creates and sets a cryptographically signed HMAC-SHA256 session cookie.
+ */
+export async function setAdminSession(user: AdminUser) {
+  try {
+    const cookieStore = await cookies();
+    const payload: SessionPayload = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      visitorId: user.visitorId,
+      expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 7, // 7 days
+    };
+
+    const token = signSessionToken(payload);
+
+    cookieStore.set(ADMIN_COOKIE_NAME, token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7,
+    });
+  } catch {
+    // In environments where cookies() throws
+  }
+}
+
+/**
+ * Validates and retrieves the active session from cookie.
+ * Rejects forged, altered, or expired tokens immediately.
+ */
+export async function getAdminSession(): Promise<AdminUser | null> {
+  try {
+    const cookieStore = await cookies();
+    const cookie = cookieStore.get(ADMIN_COOKIE_NAME);
+
+    if (!cookie?.value) return null;
+
+    const payload = verifySessionToken(cookie.value);
+    if (!payload) return null;
+
     return {
-      id: data.id,
-      email: data.email,
-      name: data.name,
-      role: data.role || 'admin',
+      id: payload.id,
+      email: payload.email,
+      name: payload.name,
+      role: payload.role,
+      visitorId: payload.visitorId,
     };
   } catch {
     return null;
   }
 }
 
+/**
+ * Clears the session cookie on logout.
+ */
 export async function clearAdminSession() {
-  const cookieStore = await cookies();
-  cookieStore.delete(ADMIN_COOKIE_NAME);
+  try {
+    const cookieStore = await cookies();
+    cookieStore.delete(ADMIN_COOKIE_NAME);
+  } catch {}
 }
 
-export async function verifyAdminCredentials(email: string, password: string): Promise<AdminUser | null> {
-  const seedEmail = process.env.SEED_ADMIN_EMAIL || 'admin@blushstudio.demo';
-  const seedPassword = process.env.SEED_ADMIN_PASSWORD || 'BlushDemo2024!';
+/**
+ * Verifies credentials against the database using scrypt hash verification.
+ * Does NOT compare plaintext passwords.
+ */
+export async function verifyAdminCredentials(
+  email: string,
+  password: string
+): Promise<AdminUser | null> {
+  if (!email || !password) return null;
 
-  // Check if credentials match seed admin
-  if (email.toLowerCase() === seedEmail.toLowerCase() && password === seedPassword) {
-    return {
-      id: 'admin-001',
-      email: seedEmail,
-      name: 'Blush Studio Admin',
-      role: 'admin',
-    };
-  }
+  const visitorId = await getVisitorId();
+  const normalizedEmail = email.toLowerCase().trim();
 
-  // Check database users & accounts
+  // Query database user record
   const [user] = await db
     .select()
     .from(schema.users)
-    .where(eq(schema.users.email, email.toLowerCase()))
+    .where(eq(schema.users.email, normalizedEmail))
     .limit(1);
 
-  if (user) {
-    const [account] = await db
-      .select()
-      .from(schema.accounts)
-      .where(eq(schema.accounts.userId, user.id))
-      .limit(1);
+  if (!user) return null;
 
-    if (account && account.password === password) {
-      return {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role || 'admin',
-      };
-    }
-  }
+  // Retrieve hashed credentials
+  const [account] = await db
+    .select()
+    .from(schema.accounts)
+    .where(eq(schema.accounts.userId, user.id))
+    .limit(1);
 
-  return null;
+  if (!account || !account.password) return null;
+
+  // Verify against scrypt hash
+  const isValid = verifyPassword(password, account.password);
+  if (!isValid) return null;
+
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: (user.role as any) === 'admin' ? 'admin' : 'demo_manager',
+    visitorId,
+  };
 }
 
-export async function requireAdminSession() {
+/**
+ * Creates a restricted Demo Manager session for public showcase visitors.
+ * Allows prospective clients to explore the dashboard without administrative write access.
+ */
+export async function createDemoManagerSession(): Promise<AdminUser> {
+  const visitorId = await getVisitorId();
+  const demoUser: AdminUser = {
+    id: `demo-${visitorId.slice(4, 12)}`,
+    email: 'demo.manager@blushstudio.demo',
+    name: 'Demo Manager',
+    role: 'demo_manager',
+    visitorId,
+  };
+
+  await setAdminSession(demoUser);
+  return demoUser;
+}
+
+/**
+ * Route protection: requires a valid signed session or redirects to login.
+ */
+export async function requireAdminSession(): Promise<AdminUser> {
   const session = await getAdminSession();
   if (!session) {
     redirect('/admin/login');
   }
   return session;
+}
+
+/**
+ * Authorization check for destructive or privileged operations.
+ * Returns true only for authenticated administrators (not demo visitors).
+ */
+export function isPrivilegedAdmin(session: AdminUser): boolean {
+  return session.role === 'admin';
+}
+
+/**
+ * Returns a Drizzle SQL filter expression that scopes appointments to:
+ * - Baseline seeded demo records, PLUS
+ * - Any appointments created by this specific visitor.
+ * Completely isolates visitor demo bookings from other simultaneous visitors.
+ */
+export function getAppointmentScopeCondition(session: AdminUser) {
+  if (session.role === 'admin') {
+    return undefined;
+  }
+  return or(
+    eq(schema.appointments.isDemoSeed, true),
+    eq(schema.appointments.visitorId, session.visitorId)
+  );
 }

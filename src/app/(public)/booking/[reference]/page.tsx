@@ -7,9 +7,23 @@ import * as schema from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { formatPrice, formatDuration, formatPhoneNumber } from '@/lib/utils';
-import { Calendar, Clock, MapPin, User, MessageCircle, ArrowLeft } from 'lucide-react';
+import { formatPrice, formatDuration } from '@/lib/utils';
+import { Calendar, Clock, MapPin, User, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { cookies } from 'next/headers';
+import { VISITOR_COOKIE_NAME } from '@/lib/auth/admin-auth';
 
+function maskPhoneNumber(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 7) return '••••••••';
+  const start = digits.slice(0, 4);
+  const end = digits.slice(-2);
+  return `${start} ••• ••${end}`;
+}
+
+function maskLastName(lastName: string): string {
+  if (!lastName) return '';
+  return `${lastName.charAt(0).toUpperCase()}.`;
+}
 
 export default async function BookingLookupPage({
   params,
@@ -18,6 +32,13 @@ export default async function BookingLookupPage({
 }) {
   await connection();
   const { reference } = await params;
+
+  if (!reference || typeof reference !== 'string' || reference.trim().length < 5) {
+    notFound();
+  }
+
+  const cookieStore = await cookies();
+  const currentVisitorId = cookieStore.get(VISITOR_COOKIE_NAME)?.value;
 
   const [appointment] = await db
     .select({
@@ -29,7 +50,8 @@ export default async function BookingLookupPage({
       paymentStatus: schema.appointments.paymentStatus,
       paymentMethod: schema.appointments.paymentMethod,
       priceCentavos: schema.appointments.priceCentavos,
-      customerNotes: schema.appointments.customerNotes,
+      visitorId: schema.appointments.visitorId,
+      isDemoSeed: schema.appointments.isDemoSeed,
       customerFirstName: schema.customers.firstName,
       customerLastName: schema.customers.lastName,
       customerPhone: schema.customers.phone,
@@ -42,10 +64,15 @@ export default async function BookingLookupPage({
     .innerJoin(schema.customers, eq(schema.appointments.customerId, schema.customers.id))
     .innerJoin(schema.services, eq(schema.appointments.serviceId, schema.services.id))
     .innerJoin(schema.staff, eq(schema.appointments.staffId, schema.staff.id))
-    .where(eq(schema.appointments.referenceNumber, reference))
+    .where(eq(schema.appointments.referenceNumber, reference.trim()))
     .limit(1);
 
   if (!appointment) {
+    notFound();
+  }
+
+  // Privacy verification: If this appointment belongs to a specific visitor, only that visitor can view it
+  if (appointment.visitorId && appointment.visitorId !== currentVisitorId) {
     notFound();
   }
 
@@ -83,11 +110,11 @@ export default async function BookingLookupPage({
         </span>
       </div>
 
-      <div className="bg-card rounded-2xl border border-border p-8 space-y-6 shadow-xs">
+      <div className="bg-card rounded-2xl border border-border p-6 sm:p-8 space-y-6 shadow-xs">
         <div className="flex items-start justify-between gap-4 border-b border-border pb-6">
           <div>
             <span className="text-xs text-rose uppercase tracking-wider font-semibold block mb-1">
-              Confirmed Appointment
+              Demonstration Reservation
             </span>
             <h1 className="font-serif text-2xl sm:text-3xl font-medium text-foreground">
               {appointment.serviceName}
@@ -110,7 +137,7 @@ export default async function BookingLookupPage({
           </Badge>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 text-xs">
           <div className="space-y-1">
             <span className="text-muted-foreground block font-medium">Stylist</span>
             <span className="text-sm font-semibold text-foreground">
@@ -124,52 +151,60 @@ export default async function BookingLookupPage({
               {manilaDateStr}
             </span>
             <span className="text-muted-foreground block">
-              {manilaStartTime} – {manilaEndTime} ({formatDuration(appointment.durationMinutes)})
+              {manilaStartTime} to {manilaEndTime} ({formatDuration(appointment.durationMinutes)})
             </span>
           </div>
 
           <div className="space-y-1">
-            <span className="text-muted-foreground block font-medium">Client Name</span>
+            <span className="text-muted-foreground block font-medium">Client (Masked for Privacy)</span>
             <span className="text-sm font-semibold text-foreground">
-              {appointment.customerFirstName} {appointment.customerLastName}
+              {appointment.customerFirstName} {maskLastName(appointment.customerLastName)}
             </span>
-            <span className="text-muted-foreground block">
-              {formatPhoneNumber(appointment.customerPhone)}
+            <span className="text-muted-foreground block font-mono">
+              {maskPhoneNumber(appointment.customerPhone)}
             </span>
           </div>
 
           <div className="space-y-1">
-            <span className="text-muted-foreground block font-medium">Estimated Total</span>
+            <span className="text-muted-foreground block font-medium">Simulated Rate</span>
             <span className="text-lg font-serif font-bold text-foreground">
               {formatPrice(appointment.priceCentavos)}
             </span>
             <span className="text-muted-foreground block capitalize">
-              Payment: {appointment.paymentStatus} ({appointment.paymentMethod || 'Cash'})
+              Payment preference: {appointment.paymentStatus} ({appointment.paymentMethod || 'Cash'})
             </span>
           </div>
         </div>
 
-        {appointment.customerNotes && (
-          <div className="p-3 rounded-lg bg-secondary/50 border border-border text-xs text-muted-foreground">
-            <strong className="text-foreground">Client Notes:</strong> {appointment.customerNotes}
+        <div className="p-4 rounded-xl bg-secondary/50 border border-border text-xs text-muted-foreground space-y-1.5">
+          <div className="flex items-center gap-1.5 text-foreground font-semibold">
+            <CheckCircle2 className="w-4 h-4 text-rose shrink-0" />
+            <span>Interactive Portfolio Demo</span>
           </div>
-        )}
+          <p>
+            This booking is registered in the live Neon database and visible in the{' '}
+            <Link href="/admin/appointments" className="text-rose font-medium hover:underline">
+              Management Portal
+            </Link>. No actual salon services will be rendered.
+          </p>
+        </div>
 
         <div className="pt-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="text-xs text-muted-foreground">
             Location: Unit 302, The Bellagio Promenade, BGC
           </div>
-          <Button variant="outline" size="sm" asChild>
-            <a
-              href={`https://m.me/blushstudio.ph.demo?text=Hi!%20Checking%20in%20for%20my%20appointment%20${appointment.referenceNumber}`}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-1.5"
-            >
-              <MessageCircle className="w-3.5 h-3.5 text-rose" />
-              <span>Contact Reception</span>
-            </a>
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/services">
+                View Menu
+              </Link>
+            </Button>
+            <Button variant="blush" size="sm" asChild>
+              <Link href="/book">
+                Book Another Service
+              </Link>
+            </Button>
+          </div>
         </div>
       </div>
     </div>

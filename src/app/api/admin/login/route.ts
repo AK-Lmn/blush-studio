@@ -1,9 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminCredentials, setAdminSession } from '@/lib/auth/admin-auth';
+import {
+  verifyAdminCredentials,
+  setAdminSession,
+  createDemoManagerSession,
+} from '@/lib/auth/admin-auth';
 
 export async function POST(request: NextRequest) {
   try {
-    const { email, password } = await request.json();
+    const body = await request.json().catch(() => ({}));
+    const { email, password, mode } = body;
+
+    // Public Showcase Demo Mode: One-click safe exploration
+    if (mode === 'demo') {
+      const demoSession = await createDemoManagerSession();
+      return NextResponse.json({
+        success: true,
+        user: demoSession,
+        message: 'Signed in as Showcase Demo Manager',
+      });
+    }
 
     if (!email || !password) {
       return NextResponse.json(

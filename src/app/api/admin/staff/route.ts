@@ -4,16 +4,25 @@ import { db } from '@/lib/db';
 import * as schema from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 
-async function checkAuth() {
+async function checkPrivilegedAuth() {
   const session = await getAdminSession();
   if (!session) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }), session: null };
   }
-  return null;
+  if (session.role !== 'admin') {
+    return {
+      error: NextResponse.json(
+        { error: 'Demo Mode: Baseline staff records are protected against public modification.' },
+        { status: 403 }
+      ),
+      session,
+    };
+  }
+  return { error: null, session };
 }
 
 export async function POST(request: NextRequest) {
-  const authErr = await checkAuth();
+  const { error: authErr } = await checkPrivilegedAuth();
   if (authErr) return authErr;
 
   try {
@@ -58,12 +67,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, staff: created }, { status: 201 });
   } catch (error: any) {
     console.error('Create staff error:', error);
-    return NextResponse.json({ error: 'Failed to create staff' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to create staff member' }, { status: 500 });
   }
 }
 
 export async function PATCH(request: NextRequest) {
-  const authErr = await checkAuth();
+  const { error: authErr } = await checkPrivilegedAuth();
   if (authErr) return authErr;
 
   try {
@@ -76,9 +85,9 @@ export async function PATCH(request: NextRequest) {
     const updates: any = { updatedAt: new Date() };
     if (firstName) updates.firstName = firstName;
     if (lastName) updates.lastName = lastName;
-    if (email !== undefined) updates.email = email || null;
-    if (phone !== undefined) updates.phone = phone || null;
-    if (bio !== undefined) updates.bio = bio || null;
+    if (email !== undefined) updates.email = email;
+    if (phone !== undefined) updates.phone = phone;
+    if (bio !== undefined) updates.bio = bio;
     if (isActive !== undefined) updates.isActive = Boolean(isActive);
 
     const [updated] = await db
@@ -90,6 +99,6 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ success: true, staff: updated });
   } catch (error: any) {
     console.error('Update staff error:', error);
-    return NextResponse.json({ error: 'Failed to update staff' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to update staff member' }, { status: 500 });
   }
 }

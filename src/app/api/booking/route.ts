@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createBooking } from '@/server/services/booking-engine';
 import { bookingSchema } from '@/lib/validations';
+import { VISITOR_COOKIE_NAME } from '@/lib/auth/admin-auth';
+import crypto from 'crypto';
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,7 +17,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await createBooking(parseResult.data as any);
+    // Retrieve or establish visitor session identity
+    let visitorId = request.cookies.get(VISITOR_COOKIE_NAME)?.value;
+    let setVisitorCookie = false;
+    if (!visitorId || !visitorId.startsWith('vst_')) {
+      visitorId = `vst_${crypto.randomUUID()}`;
+      setVisitorCookie = true;
+    }
+
+    const result = await createBooking({
+      ...parseResult.data,
+      visitorId,
+    } as any);
 
     if (!result.success) {
       return NextResponse.json(
@@ -24,7 +37,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return NextResponse.json(result, { status: 201 });
+    const response = NextResponse.json(result, { status: 201 });
+    if (setVisitorCookie) {
+      response.cookies.set(VISITOR_COOKIE_NAME, visitorId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 60 * 60 * 24 * 30, // 30 days
+      });
+    }
+
+    return response;
   } catch (error: any) {
     console.error('API create booking error:', error);
     return NextResponse.json(

@@ -10,6 +10,14 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Baseline salon configuration is protected against public modification in demo mode
+  if (session.role !== 'admin') {
+    return NextResponse.json(
+      { error: 'Demo Mode: Studio business settings are protected from public modification.' },
+      { status: 403 }
+    );
+  }
+
   try {
     const body = await request.json();
     const {
@@ -51,27 +59,9 @@ export async function PATCH(request: NextRequest) {
         .returning();
 
       return NextResponse.json({ success: true, settings: updated });
-    } else {
-      const [created] = await db
-        .insert(schema.businessSettings)
-        .values({
-          businessName,
-          tagline,
-          address,
-          phone,
-          email,
-          messengerUrl,
-          instagramUrl,
-          bookingIntervalMinutes: parseInt(bookingIntervalMinutes, 10),
-          minAdvanceBookingHours: parseInt(minAdvanceBookingHours, 10),
-          maxAdvanceBookingDays: parseInt(maxAdvanceBookingDays, 10),
-          bufferMinutes: parseInt(bufferMinutes, 10),
-          paymentInstructions,
-        })
-        .returning();
-
-      return NextResponse.json({ success: true, settings: created });
     }
+
+    return NextResponse.json({ error: 'Settings not initialized' }, { status: 404 });
   } catch (error: any) {
     console.error('Update settings error:', error);
     return NextResponse.json({ error: 'Failed to update settings' }, { status: 500 });

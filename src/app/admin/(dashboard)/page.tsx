@@ -19,15 +19,20 @@ import {
 } from 'lucide-react';
 
 
+import { requireAdminSession, getAppointmentScopeCondition } from '@/lib/auth/admin-auth';
+
 export default async function AdminDashboardOverview() {
+  const session = await requireAdminSession();
+  const scopeCondition = getAppointmentScopeCondition(session);
+
   // 1. Calculate Today's Range in Manila Time (UTC+8)
   const now = new Date();
   const manilaDateString = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }); // YYYY-MM-DD
   const todayStart = new Date(`${manilaDateString}T00:00:00+08:00`);
   const todayEnd = new Date(`${manilaDateString}T23:59:59+08:00`);
 
-  // 2. Fetch all appointments to compute metrics accurately
-  const allAppointments = await db
+  // 2. Fetch scoped appointments to compute metrics accurately
+  let query = db
     .select({
       id: schema.appointments.id,
       referenceNumber: schema.appointments.referenceNumber,
@@ -48,8 +53,11 @@ export default async function AdminDashboardOverview() {
     .from(schema.appointments)
     .innerJoin(schema.customers, eq(schema.appointments.customerId, schema.customers.id))
     .innerJoin(schema.services, eq(schema.appointments.serviceId, schema.services.id))
-    .innerJoin(schema.staff, eq(schema.appointments.staffId, schema.staff.id))
-    .orderBy(desc(schema.appointments.createdAt));
+    .innerJoin(schema.staff, eq(schema.appointments.staffId, schema.staff.id));
+
+  const allAppointments = scopeCondition
+    ? await query.where(scopeCondition).orderBy(desc(schema.appointments.createdAt))
+    : await query.orderBy(desc(schema.appointments.createdAt));
 
   // Compute metrics
   const totalAppointments = allAppointments.length;

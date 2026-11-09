@@ -25,7 +25,7 @@ import {
 export function AdminNav({
   adminUser,
 }: {
-  adminUser: { name: string; email: string };
+  adminUser: { name: string; email: string; role?: string };
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -88,7 +88,12 @@ export function AdminNav({
           </div>
 
           <div className="px-3 py-2 rounded-lg bg-secondary/50 border border-border text-xs">
-            <div className="font-semibold text-foreground truncate">{adminUser.name}</div>
+            <div className="flex items-center justify-between gap-1">
+              <span className="font-semibold text-foreground truncate">{adminUser.name}</span>
+              {adminUser.role === 'demo_manager' && (
+                <span className="text-[10px] bg-rose/10 text-rose px-1.5 py-0.5 rounded font-medium">Demo</span>
+              )}
+            </div>
             <div className="text-[11px] text-muted-foreground truncate">{adminUser.email}</div>
           </div>
 

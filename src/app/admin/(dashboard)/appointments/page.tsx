@@ -1,12 +1,15 @@
 import React from 'react';
 import { db } from '@/lib/db';
 import * as schema from '@/lib/db/schema';
-import { eq, desc, asc } from 'drizzle-orm';
+import { eq, desc, asc, or } from 'drizzle-orm';
 import { AppointmentTable } from '@/components/admin/appointment-table';
-
+import { requireAdminSession, getAppointmentScopeCondition } from '@/lib/auth/admin-auth';
 
 export default async function AdminAppointmentsPage() {
-  const appointments = await db
+  const session = await requireAdminSession();
+  const scopeCondition = getAppointmentScopeCondition(session);
+
+  let query = db
     .select({
       id: schema.appointments.id,
       referenceNumber: schema.appointments.referenceNumber,
@@ -19,6 +22,8 @@ export default async function AdminAppointmentsPage() {
       customerNotes: schema.appointments.customerNotes,
       adminNotes: schema.appointments.adminNotes,
       isWalkIn: schema.appointments.isWalkIn,
+      visitorId: schema.appointments.visitorId,
+      isDemoSeed: schema.appointments.isDemoSeed,
       customerFirstName: schema.customers.firstName,
       customerLastName: schema.customers.lastName,
       customerPhone: schema.customers.phone,
@@ -29,8 +34,11 @@ export default async function AdminAppointmentsPage() {
     .from(schema.appointments)
     .innerJoin(schema.customers, eq(schema.appointments.customerId, schema.customers.id))
     .innerJoin(schema.services, eq(schema.appointments.serviceId, schema.services.id))
-    .innerJoin(schema.staff, eq(schema.appointments.staffId, schema.staff.id))
-    .orderBy(desc(schema.appointments.startTime));
+    .innerJoin(schema.staff, eq(schema.appointments.staffId, schema.staff.id));
+
+  const appointments = scopeCondition
+    ? await query.where(scopeCondition).orderBy(desc(schema.appointments.startTime))
+    : await query.orderBy(desc(schema.appointments.startTime));
 
   const services = await db
     .select({

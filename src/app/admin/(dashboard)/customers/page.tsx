@@ -1,12 +1,31 @@
 import React from 'react';
 import { db } from '@/lib/db';
 import * as schema from '@/lib/db/schema';
-import { desc, count, sql, eq } from 'drizzle-orm';
+import { desc, count, sql, eq, or } from 'drizzle-orm';
 import { CustomerTable } from '@/components/admin/customer-table';
-
+import { requireAdminSession, getAppointmentScopeCondition } from '@/lib/auth/admin-auth';
 
 export default async function AdminCustomersPage() {
-  const customerList = await db
+  const session = await requireAdminSession();
+  const scopeCondition = getAppointmentScopeCondition(session);
+
+  // Get scoped appointments for this session
+  let apptQuery = db
+    .select({
+      id: schema.appointments.id,
+      customerId: schema.appointments.customerId,
+      startTime: schema.appointments.startTime,
+    })
+    .from(schema.appointments);
+
+  const appointments = scopeCondition
+    ? await apptQuery.where(scopeCondition)
+    : await apptQuery;
+
+  // Allowed customer IDs for this session
+  const allowedCustomerIds = new Set(appointments.map((a: any) => a.customerId));
+
+  const allCustomers = await db
     .select({
       id: schema.customers.id,
       firstName: schema.customers.firstName,
@@ -18,13 +37,9 @@ export default async function AdminCustomersPage() {
     .from(schema.customers)
     .orderBy(desc(schema.customers.createdAt));
 
-  // Get appointment count for each customer
-  const appointments = await db
-    .select({
-      customerId: schema.appointments.customerId,
-      startTime: schema.appointments.startTime,
-    })
-    .from(schema.appointments);
+  const customerList = session.role === 'admin'
+    ? allCustomers
+    : allCustomers.filter((c: any) => allowedCustomerIds.has(c.id));
 
   const customersWithCounts = customerList.map((c: any) => {
     const custAppts = appointments.filter((a: any) => a.customerId === c.id);

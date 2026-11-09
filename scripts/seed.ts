@@ -1,6 +1,7 @@
 import { db, migrateSchema } from '../src/lib/db';
 import * as schema from '../src/lib/db/schema';
 import { eq } from 'drizzle-orm';
+import { hashPassword } from '../src/lib/auth/password';
 import path from 'path';
 import fs from 'fs';
 
@@ -496,44 +497,39 @@ async function runSeed() {
   ];
 
   for (const appt of sampleAppointments) {
-    await db.insert(schema.appointments).values(appt);
+    await db.insert(schema.appointments).values({
+      ...appt,
+      isDemoSeed: true,
+      visitorId: null,
+    });
   }
 
-  // 12. Seed Demo Admin User
+  // 12. Seed Demo Admin User with Scrypt Hashed Password
   console.log('Seeding Demo Admin User...');
   const adminEmail = process.env.SEED_ADMIN_EMAIL || 'admin@blushstudio.demo';
   const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'BlushDemo2024!';
 
-  // Check if admin user exists in Better Auth table
-  const existingUser = await db
-    .select()
-    .from(schema.users)
-    .where(eq(schema.users.email, adminEmail))
-    .limit(1);
+  // Clean old admin records to ensure password hash is updated
+  await db.delete(schema.accounts).where(eq(schema.accounts.id, 'admin-account-blush-001'));
+  await db.delete(schema.users).where(eq(schema.users.email, adminEmail));
 
-  if (existingUser.length === 0) {
-    // Generate a simple salt/hash for direct account insertion if better auth isn't called via API
-    // We insert into users and accounts
-    const userId = 'admin-user-blush-001';
-    await db.insert(schema.users).values({
-      id: userId,
-      name: 'Blush Studio Admin',
-      email: adminEmail,
-      emailVerified: true,
-      role: 'admin',
-    });
+  const userId = 'admin-user-blush-001';
+  await db.insert(schema.users).values({
+    id: userId,
+    name: 'Blush Studio Admin',
+    email: adminEmail,
+    emailVerified: true,
+    role: 'admin',
+  });
 
-    // We can also insert into accounts table
-    // For password authentication, better-auth hashes passwords
-    // We will provide a clean programmatic API or hash
-    await db.insert(schema.accounts).values({
-      id: 'admin-account-blush-001',
-      accountId: userId,
-      providerId: 'credential',
-      userId: userId,
-      password: adminPassword, // Better Auth supports password or custom auth
-    });
-  }
+  const secureHash = hashPassword(adminPassword);
+  await db.insert(schema.accounts).values({
+    id: 'admin-account-blush-001',
+    accountId: userId,
+    providerId: 'credential',
+    userId: userId,
+    password: secureHash,
+  });
 
   console.log('✨ Blush Studio Database Seeding Complete!');
   console.log('---');

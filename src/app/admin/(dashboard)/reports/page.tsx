@@ -1,13 +1,16 @@
 import React from 'react';
 import { db } from '@/lib/db';
 import * as schema from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, or } from 'drizzle-orm';
 import { ReportCharts } from '@/components/admin/report-charts';
 import { formatPrice } from '@/lib/utils';
-
+import { requireAdminSession, getAppointmentScopeCondition } from '@/lib/auth/admin-auth';
 
 export default async function AdminReportsPage() {
-  const appointments = await db
+  const session = await requireAdminSession();
+  const scopeCondition = getAppointmentScopeCondition(session);
+
+  let query = db
     .select({
       id: schema.appointments.id,
       priceCentavos: schema.appointments.priceCentavos,
@@ -23,6 +26,10 @@ export default async function AdminReportsPage() {
       schema.serviceCategories,
       eq(schema.services.categoryId, schema.serviceCategories.id)
     );
+
+  const appointments = scopeCondition
+    ? await query.where(scopeCondition)
+    : await query;
 
   // Group by category
   const categoryMap = new Map<string, { revenue: number; count: number }>();

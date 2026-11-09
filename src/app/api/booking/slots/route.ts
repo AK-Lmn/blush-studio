@@ -18,6 +18,10 @@ export async function GET(request: NextRequest) {
     const slots = await getAvailableSlots(serviceId, staffId, date);
     return NextResponse.json({ slots });
   } catch (error: any) {
+    const status = error.statusCode || (error.message?.includes('not found') ? 404 : 400);
+    if (status === 400 || status === 404) {
+      return NextResponse.json({ error: error.message }, { status });
+    }
     console.error('Error fetching available slots:', error);
     return NextResponse.json(
       { error: error.message || 'Failed to calculate available slots' },
