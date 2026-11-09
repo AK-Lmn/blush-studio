@@ -2,19 +2,24 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { db } from '@/lib/db';
 import * as schema from '@/lib/db/schema';
-import { eq, or, and } from 'drizzle-orm';
+import { eq, or } from 'drizzle-orm';
 import { verifyPassword } from './password';
 import {
   signSessionToken,
   verifySessionToken,
   signVisitorId,
   verifyVisitorId,
+  resolveVisitorIdentity,
+  VisitorIdentity,
   SessionPayload,
 } from './session-token';
 import crypto from 'crypto';
 
 export const ADMIN_COOKIE_NAME = 'blush_admin_session';
 export const VISITOR_COOKIE_NAME = 'blush_visitor_id';
+
+export { resolveVisitorIdentity, signVisitorId, verifyVisitorId };
+export type { VisitorIdentity };
 
 export interface AdminUser {
   id: string;
@@ -26,34 +31,29 @@ export interface AdminUser {
 
 /**
  * Retrieves the current visitor ID from cookie or generates a new one.
- * Uses HMAC-SHA256 signatures to prevent client-side visitor ID spoofing.
+ * Uses shared resolveVisitorIdentity to ensure valid HMAC signatures and raw IDs.
  */
 export async function getVisitorId(): Promise<string> {
   try {
     const cookieStore = await cookies();
     const existing = cookieStore.get(VISITOR_COOKIE_NAME)?.value;
-    if (existing) {
-      const verifiedId = verifyVisitorId(existing);
-      if (verifiedId) {
-        return verifiedId;
+    const identity = resolveVisitorIdentity(existing);
+
+    if (identity.isNew) {
+      try {
+        cookieStore.set(VISITOR_COOKIE_NAME, identity.signedCookie, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          path: '/',
+          maxAge: 60 * 60 * 24 * 30, // 30 days
+        });
+      } catch {
+        // Read-only server components cannot modify response cookies
       }
     }
 
-    const rawId = `vst_${crypto.randomUUID()}`;
-    const signedValue = signVisitorId(rawId);
-
-    try {
-      cookieStore.set(VISITOR_COOKIE_NAME, signedValue, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/',
-        maxAge: 60 * 60 * 24 * 30, // 30 days
-      });
-    } catch {
-      // If called in context where response cookies cannot be modified, return generated ID
-    }
-    return rawId;
+    return identity.rawId;
   } catch {
     return `vst_test_${crypto.randomUUID()}`;
   }

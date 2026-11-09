@@ -11,6 +11,7 @@ import {
   verifySessionToken,
   signVisitorId,
   verifyVisitorId,
+  resolveVisitorIdentity,
   SessionPayload,
 } from '@/lib/auth/session-token';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
@@ -170,5 +171,41 @@ describe('Admin Authentication & Security Tests', () => {
     // 3. Random invalid format
     expect(verifyVisitorId('malformed_cookie_string')).toBeNull();
     expect(verifyVisitorId('')).toBeNull();
+  });
+
+  describe('resolveVisitorIdentity Unified Helper', () => {
+    it('verifies and decodes valid signed cookies, keeping raw ID <= 64 chars', () => {
+      const raw = 'vst_a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      const signed = signVisitorId(raw);
+
+      const identity = resolveVisitorIdentity(signed);
+      expect(identity.rawId).toBe(raw);
+      expect(identity.signedCookie).toBe(signed);
+      expect(identity.isNew).toBe(false);
+      expect(identity.rawId.length).toBeLessThanOrEqual(64);
+    });
+
+    it('adopts and upgrades unsigned legacy vst_ cookies without losing identity', () => {
+      const legacyRaw = 'vst_99887766-5544-3322-1100-aabbccddeeff';
+      const identity = resolveVisitorIdentity(legacyRaw);
+
+      expect(identity.rawId).toBe(legacyRaw);
+      expect(identity.signedCookie).toContain('.');
+      expect(identity.signedCookie.startsWith(legacyRaw)).toBe(true);
+      expect(identity.isNew).toBe(true); // Needs Set-Cookie update
+      expect(verifyVisitorId(identity.signedCookie)).toBe(legacyRaw);
+    });
+
+    it('generates secure fresh signed identity when cookie is missing or forged', () => {
+      const missingIdentity = resolveVisitorIdentity(null);
+      expect(missingIdentity.rawId).toMatch(/^vst_[0-9a-f-]{36}$/);
+      expect(missingIdentity.isNew).toBe(true);
+      expect(verifyVisitorId(missingIdentity.signedCookie)).toBe(missingIdentity.rawId);
+
+      const forgedIdentity = resolveVisitorIdentity('vst_fake_id.bad_signature');
+      expect(forgedIdentity.rawId).not.toBe('vst_fake_id');
+      expect(forgedIdentity.isNew).toBe(true);
+      expect(verifyVisitorId(forgedIdentity.signedCookie)).toBe(forgedIdentity.rawId);
+    });
   });
 });

@@ -8,9 +8,9 @@ import { eq } from 'drizzle-orm';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatPrice, formatDuration } from '@/lib/utils';
-import { Calendar, Clock, MapPin, User, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, CheckCircle2 } from 'lucide-react';
 import { cookies } from 'next/headers';
-import { VISITOR_COOKIE_NAME } from '@/lib/auth/admin-auth';
+import { VISITOR_COOKIE_NAME, resolveVisitorIdentity } from '@/lib/auth/admin-auth';
 
 function maskPhoneNumber(phone: string): string {
   const digits = phone.replace(/\D/g, '');
@@ -37,8 +37,10 @@ export default async function BookingLookupPage({
     notFound();
   }
 
+  // Single source of truth: extract and verify raw visitor ID from cookie
   const cookieStore = await cookies();
-  const currentVisitorId = cookieStore.get(VISITOR_COOKIE_NAME)?.value;
+  const visitorCookie = cookieStore.get(VISITOR_COOKIE_NAME)?.value;
+  const currentVisitorId = visitorCookie ? resolveVisitorIdentity(visitorCookie).rawId : null;
 
   const [appointment] = await db
     .select({

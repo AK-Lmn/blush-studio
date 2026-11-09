@@ -9,6 +9,15 @@ export interface SessionPayload {
   expiresAt: number;
 }
 
+export interface VisitorIdentity {
+  /** Authoritative raw visitor identifier (e.g. "vst_<uuid>", <= 40 chars) safe for DB column varchar(64) */
+  rawId: string;
+  /** HMAC-SHA256 cryptographically signed cookie representation (<rawId>.<signature>, ~84 chars) */
+  signedCookie: string;
+  /** Flag indicating whether the cookie should be written/refreshed on the response */
+  isNew: boolean;
+}
+
 function getAuthSecret(): string {
   const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET;
   if (secret) {
@@ -48,7 +57,7 @@ export function signVisitorId(visitorId: string): string {
 
 /**
  * Verifies the cryptographic HMAC-SHA256 signature on a visitor ID.
- * Returns the verified visitor ID string, or null if tampered, forged, or missing.
+ * Returns the verified raw visitor ID string, or null if tampered, forged, or missing.
  */
 export function verifyVisitorId(signedValue: string): string | null {
   if (!signedValue || typeof signedValue !== 'string') return null;
@@ -78,6 +87,53 @@ export function verifyVisitorId(signedValue: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Single source of truth for resolving visitor identity across the application:
+ * - Valid signed cookie -> verifies signature, extracts and returns the raw visitor ID.
+ * - Legacy or pre-existing raw 'vst_' cookie -> adopts the raw ID and signs it so identity is preserved seamlessly.
+ * - Missing, tampered, forged, or invalid cookie -> generates a fresh raw ID and signs it.
+ *
+ * Ensures:
+ * 1. Database column `appointments.visitor_id` (varchar 64) ONLY receives rawId (<= 40 chars).
+ * 2. Client cookies ALWAYS store the HMAC-SHA256 signed value.
+ * 3. Lookup and admin dashboard queries always compare rawId against rawId.
+ */
+export function resolveVisitorIdentity(cookieValue?: string | null): VisitorIdentity {
+  if (cookieValue && typeof cookieValue === 'string') {
+    const trimmed = cookieValue.trim();
+
+    // 1. Valid signed cookie (<rawId>.<signature>)
+    const verified = verifyVisitorId(trimmed);
+    if (verified) {
+      return {
+        rawId: verified,
+        signedCookie: trimmed,
+        isNew: false,
+      };
+    }
+
+    // 2. Unsigned legacy or client-generated 'vst_' cookie without signature
+    // Adopt the raw ID so existing user bookings aren't lost when upgrading to signed format
+    if (trimmed.startsWith('vst_') && !trimmed.includes('.') && trimmed.length <= 64) {
+      const signed = signVisitorId(trimmed);
+      return {
+        rawId: trimmed,
+        signedCookie: signed,
+        isNew: true, // Needs cookie update on client
+      };
+    }
+  }
+
+  // 3. Missing, tampered, or invalid: generate fresh identity
+  const rawId = `vst_${crypto.randomUUID()}`;
+  const signedCookie = signVisitorId(rawId);
+  return {
+    rawId,
+    signedCookie,
+    isNew: true,
+  };
 }
 
 /**

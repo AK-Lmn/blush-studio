@@ -15,13 +15,23 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
   let incompatibleStaffId: string;
   let futureDateStr: string;
 
-  function getSafeWorkingDay(offsetDays: number = 3): string {
-    const d = new Date();
-    d.setDate(d.getDate() + offsetDays);
-    if (d.getDay() === 0) {
-      d.setDate(d.getDate() + 1); // Skip Sunday
+  async function findWorkingDateWithSlots(
+    minSlots: number = 2,
+    startOffset: number = 3
+  ): Promise<{ dateStr: string; slots: string[] }> {
+    for (let offset = startOffset; offset < 28; offset++) {
+      const d = new Date();
+      const manila = new Date(d.getTime() + 8 * 3600 * 1000);
+      manila.setUTCDate(manila.getUTCDate() + offset);
+      if (manila.getUTCDay() === 0) continue; // Skip Sunday
+
+      const dateStr = manila.toISOString().slice(0, 10);
+      const slots = await getAvailableSlots(testServiceId, testStaffId, dateStr);
+      if (slots.length >= minSlots) {
+        return { dateStr, slots };
+      }
     }
-    return d.toISOString().slice(0, 10);
+    throw new Error(`Could not find future working date with at least ${minSlots} slots`);
   }
 
   beforeAll(async () => {
@@ -55,8 +65,9 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
       incompatibleStaffId = incompatible.id;
     }
 
-    // 4. Calculate a safe future working day
-    futureDateStr = getSafeWorkingDay(3);
+    // 4. Calculate a safe future working day with slots
+    const found = await findWorkingDateWithSlots(2, 3);
+    futureDateStr = found.dateStr;
   });
 
   it('calculates available slots respecting business hours and intervals', async () => {
@@ -108,10 +119,7 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
   });
 
   it('successfully creates an appointment and persists to database with visitor ID', async () => {
-    const dateStr = getSafeWorkingDay(4);
-
-    const slots = await getAvailableSlots(testServiceId, testStaffId, dateStr);
-    expect(slots.length).toBeGreaterThan(0);
+    const { dateStr, slots } = await findWorkingDateWithSlots(1, 4);
     const chosenSlot = slots[0];
 
     const result = await createBooking({
@@ -146,17 +154,14 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
   });
 
   it('prevents double-booking / rejects overlapping appointments on same slot', async () => {
-    const testDateStr = getSafeWorkingDay(6);
-
-    const slots = await getAvailableSlots(testServiceId, testStaffId, testDateStr);
-    expect(slots.length).toBeGreaterThan(0);
+    const { dateStr, slots } = await findWorkingDateWithSlots(1, 6);
     const slotToBook = slots[0];
 
     // First booking
     const firstResult = await createBooking({
       serviceId: testServiceId,
       staffId: testStaffId,
-      date: testDateStr,
+      date: dateStr,
       time: slotToBook,
       customer: {
         firstName: 'ClientA',
@@ -171,7 +176,7 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
     const conflictResult = await createBooking({
       serviceId: testServiceId,
       staffId: testStaffId,
-      date: testDateStr,
+      date: dateStr,
       time: slotToBook,
       customer: {
         firstName: 'ClientB',
@@ -186,10 +191,7 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
   });
 
   it('prevents concurrent booking race conditions (5 simultaneous requests)', async () => {
-    const testDateStr = getSafeWorkingDay(8);
-
-    const slots = await getAvailableSlots(testServiceId, testStaffId, testDateStr);
-    expect(slots.length).toBeGreaterThan(0);
+    const { dateStr, slots } = await findWorkingDateWithSlots(1, 8);
     const targetSlot = slots[0];
 
     // Fire 5 simultaneous requests for the exact same slot
@@ -197,7 +199,7 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
       createBooking({
         serviceId: testServiceId,
         staffId: testStaffId,
-        date: testDateStr,
+        date: dateStr,
         time: targetSlot,
         customer: {
           firstName: `ConcurrentClient${i}`,
@@ -217,13 +219,13 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
   });
 
   it('authoritatively rejects booking outside active working hours', async () => {
-    const validDateStr = getSafeWorkingDay(5);
+    const { dateStr } = await findWorkingDateWithSlots(1, 5);
 
     // 04:00 AM is well before salon opening time (09:00 AM)
     const earlyResult = await createBooking({
       serviceId: testServiceId,
       staffId: testStaffId,
-      date: validDateStr,
+      date: dateStr,
       time: '04:00',
       customer: {
         firstName: 'Night',
@@ -256,5 +258,112 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('30 days in advance');
+  });
+
+  it('protects seeded customer records from being overwritten when a visitor books with the same phone', async () => {
+    // 1. Get seeded customer Chloe Santos
+    const [chloe] = await db
+      .select()
+      .from(schema.customers)
+      .where(eq(schema.customers.firstName, 'Chloe'))
+      .limit(1);
+
+    expect(chloe).toBeDefined();
+    const originalChloeEmail = chloe.email;
+    const originalChloeLastName = chloe.lastName;
+
+    // 2. A visitor books using Chloe's phone number
+    const { dateStr, slots } = await findWorkingDateWithSlots(1, 10);
+
+    const bookingResult = await createBooking({
+      serviceId: testServiceId,
+      staffId: testStaffId,
+      date: dateStr,
+      time: slots[0],
+      customer: {
+        firstName: 'Imposter',
+        lastName: 'TryingToOverwrite',
+        phone: chloe.phone,
+        email: 'imposter@hacker.demo',
+      },
+      visitorId: 'vst_test_external_visitor_99',
+    });
+
+    expect(bookingResult.success).toBe(true);
+
+    // 3. Verify Chloe Santos' original customer record is 100% UNTOUCHED
+    const [refreshedChloe] = await db
+      .select()
+      .from(schema.customers)
+      .where(eq(schema.customers.id, chloe.id));
+
+    expect(refreshedChloe.firstName).toBe('Chloe');
+    expect(refreshedChloe.lastName).toBe(originalChloeLastName);
+    expect(refreshedChloe.email).toBe(originalChloeEmail);
+
+    // 4. Verify a separate customer record was created for the visitor
+    const [visitorAppt] = await db
+      .select()
+      .from(schema.appointments)
+      .where(eq(schema.appointments.id, bookingResult.appointmentId!));
+
+    expect(visitorAppt.customerId).not.toBe(chloe.id);
+  });
+
+  it('isolates customers between separate visitors who share the same phone number', async () => {
+    const sharedPhone = '09887776655';
+    const day1 = await findWorkingDateWithSlots(1, 12);
+    const day2 = await findWorkingDateWithSlots(1, 14);
+
+    // Visitor 1 books
+    const res1 = await createBooking({
+      serviceId: testServiceId,
+      staffId: testStaffId,
+      date: day1.dateStr,
+      time: day1.slots[0],
+      customer: {
+        firstName: 'VisitorOneName',
+        lastName: 'Original',
+        phone: sharedPhone,
+        email: 'vis1@test.com',
+      },
+      visitorId: 'vst_user_alpha',
+    });
+    expect(res1.success).toBe(true);
+
+    // Visitor 2 books with same phone on day 2
+    const res2 = await createBooking({
+      serviceId: testServiceId,
+      staffId: testStaffId,
+      date: day2.dateStr,
+      time: day2.slots[0],
+      customer: {
+        firstName: 'VisitorTwoName',
+        lastName: 'Different',
+        phone: sharedPhone,
+        email: 'vis2@test.com',
+      },
+      visitorId: 'vst_user_beta',
+    });
+    expect(res2.success).toBe(true);
+
+    // Verify both appointments point to distinct customer records
+    const [appt1] = await db
+      .select()
+      .from(schema.appointments)
+      .where(eq(schema.appointments.id, res1.appointmentId!));
+    const [appt2] = await db
+      .select()
+      .from(schema.appointments)
+      .where(eq(schema.appointments.id, res2.appointmentId!));
+
+    expect(appt1.customerId).not.toBe(appt2.customerId);
+
+    // Verify customer 1 was not overwritten
+    const [cust1] = await db
+      .select()
+      .from(schema.customers)
+      .where(eq(schema.customers.id, appt1.customerId));
+    expect(cust1.firstName).toBe('VisitorOneName');
   });
 });

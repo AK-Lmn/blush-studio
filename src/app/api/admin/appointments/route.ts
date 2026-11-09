@@ -5,6 +5,8 @@ import * as schema from '@/lib/db/schema';
 import { eq, and, or } from 'drizzle-orm';
 import { createBooking } from '@/server/services/booking-engine';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Helper to require authenticated admin or demo manager session
 async function checkAuth() {
   const session = await getAdminSession();
@@ -23,8 +25,8 @@ export async function PATCH(request: NextRequest) {
     const body = await request.json();
     const { id, status, paymentStatus, paymentMethod, adminNotes } = body;
 
-    if (!id) {
-      return NextResponse.json({ error: 'Appointment ID required' }, { status: 400 });
+    if (!id || typeof id !== 'string' || !UUID_REGEX.test(id)) {
+      return NextResponse.json({ error: 'Valid UUID appointment ID required' }, { status: 400 });
     }
 
     // Fetch existing appointment to verify access scope

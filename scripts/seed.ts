@@ -394,9 +394,6 @@ async function runSeed() {
   // 11. Appointments (Past, Today, Upcoming)
   console.log('Seeding Realistic Appointments...');
   const now = new Date();
-  // Set reference times in UTC matching Manila daytime
-  const todayStr = now.toISOString().slice(0, 10);
-
   const sampleAppointments = [
     // Completed past appointment
     {
@@ -507,7 +504,13 @@ async function runSeed() {
   // 12. Seed Demo Admin User with Scrypt Hashed Password
   console.log('Seeding Demo Admin User...');
   const adminEmail = process.env.SEED_ADMIN_EMAIL || 'admin@blushstudio.demo';
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'BlushDemo2024!';
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD;
+
+  if (!adminPassword) {
+    throw new Error(
+      'FATAL: SEED_ADMIN_PASSWORD or ADMIN_PASSWORD environment variable must be set before running database seed. No hardcoded default password allowed.'
+    );
+  }
 
   // Clean old admin records to ensure password hash is updated
   await db.delete(schema.accounts).where(eq(schema.accounts.id, 'admin-account-blush-001'));
@@ -532,12 +535,6 @@ async function runSeed() {
   });
 
   console.log('✨ Blush Studio Database Seeding Complete!');
-  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-    console.log('---');
-    console.log(`Development Admin Login: ${adminEmail}`);
-    console.log(`Development Admin Password: [CONFIGURED_IN_ENV_OR_FIXTURE]`);
-    console.log('---');
-  }
 }
 
 runSeed()

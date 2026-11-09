@@ -411,7 +411,31 @@ export async function createBooking(
       const startTime = createManilaDateTime(input.date, input.time);
       const endTime = addMinutes(startTime, service.durationMinutes);
 
-      // 5. Verify business hours
+      // 5. Booking horizon & advance booking constraints (authoritative check before schedule)
+      const now = new Date();
+      if (!input.isWalkIn) {
+        const minAdvanceHours = settings?.minAdvanceBookingHours ?? 2;
+        const minBookingTime = addMinutes(now, minAdvanceHours * 60);
+
+        if (startTime < minBookingTime) {
+          return {
+            success: false,
+            error: `Appointments must be booked at least ${minAdvanceHours} hours in advance`,
+          };
+        }
+
+        const maxAdvanceDays = settings?.maxAdvanceBookingDays ?? 30;
+        const maxBookingTime = addMinutes(now, maxAdvanceDays * 24 * 60);
+
+        if (startTime > maxBookingTime) {
+          return {
+            success: false,
+            error: `Appointments cannot be booked more than ${maxAdvanceDays} days in advance`,
+          };
+        }
+      }
+
+      // 6. Verify business hours
       const [year, month, day] = input.date.split('-').map(Number);
       const dateObj = new Date(year, month - 1, day);
       const dayName = getDayOfWeek(dateObj);
@@ -425,7 +449,7 @@ export async function createBooking(
         return { success: false, error: 'The salon is closed on this day' };
       }
 
-      // 6. Verify staff is scheduled to work on this day
+      // 7. Verify staff is scheduled to work on this day
       const [staffSched] = await tx
         .select()
         .from(staffSchedules)
@@ -444,7 +468,7 @@ export async function createBooking(
         };
       }
 
-      // 7. Verify staff is not on leave / unavailable
+      // 8. Verify staff is not on leave / unavailable
       const dayStart = createManilaDateTime(input.date, '00:00');
       const dayEnd = createManilaDateTime(input.date, '23:59');
 
@@ -466,7 +490,7 @@ export async function createBooking(
         };
       }
 
-      // 8. Verify appointment fits entirely within working hours window
+      // 9. Verify appointment fits entirely within working hours window
       const bizOpen = parseTime(bizHours.openTime);
       const bizClose = parseTime(bizHours.closeTime);
       const staffStart = parseTime(staffSched.startTime);
@@ -492,30 +516,6 @@ export async function createBooking(
         };
       }
 
-      // 9. Booking horizon & advance booking constraints
-      const now = new Date();
-      if (!input.isWalkIn) {
-        const minAdvanceHours = settings?.minAdvanceBookingHours ?? 2;
-        const minBookingTime = addMinutes(now, minAdvanceHours * 60);
-
-        if (startTime < minBookingTime) {
-          return {
-            success: false,
-            error: `Appointments must be booked at least ${minAdvanceHours} hours in advance`,
-          };
-        }
-
-        const maxAdvanceDays = settings?.maxAdvanceBookingDays ?? 30;
-        const maxBookingTime = addMinutes(now, maxAdvanceDays * 24 * 60);
-
-        if (startTime > maxBookingTime) {
-          return {
-            success: false,
-            error: `Appointments cannot be booked more than ${maxAdvanceDays} days in advance`,
-          };
-        }
-      }
-
       // 10. Verify no conflicting appointments exist for this staff member (with buffers)
       const startWithBuffer = addMinutes(startTime, -buffer);
       const endWithBuffer = addMinutes(endTime, buffer);
@@ -539,27 +539,51 @@ export async function createBooking(
         };
       }
 
-      // 8. Find or create customer
-      let customerId: string;
+      // 11. Find or create customer (isolated by visitor session)
+      // Never overwrite seeded baseline customers or other visitors' customer records
+      let customerId: string | null = null;
       const normalizedPhone = input.customer.phone.replace(/[\s\-()]/g, '');
 
-      const [existingCustomer] = await tx
-        .select()
-        .from(customers)
-        .where(eq(customers.phone, normalizedPhone));
-
-      if (existingCustomer) {
-        customerId = existingCustomer.id;
-        await tx
-          .update(customers)
-          .set({
-            firstName: input.customer.firstName,
-            lastName: input.customer.lastName,
-            email: input.customer.email || existingCustomer.email,
-            updatedAt: new Date(),
+      if (input.visitorId) {
+        const candidateCustomers = await tx
+          .select({
+            id: customers.id,
+            email: customers.email,
           })
-          .where(eq(customers.id, customerId));
-      } else {
+          .from(customers)
+          .where(eq(customers.phone, normalizedPhone));
+
+        for (const candidate of candidateCustomers) {
+          const appts = await tx
+            .select({
+              isDemoSeed: appointments.isDemoSeed,
+              visitorId: appointments.visitorId,
+            })
+            .from(appointments)
+            .where(eq(appointments.customerId, candidate.id));
+
+          const isSeed = appts.some((a: any) => a.isDemoSeed === true);
+          const belongsToThisVisitor =
+            appts.length > 0 &&
+            appts.every((a: any) => a.visitorId === input.visitorId && !a.isDemoSeed);
+
+          if (!isSeed && belongsToThisVisitor) {
+            customerId = candidate.id;
+            await tx
+              .update(customers)
+              .set({
+                firstName: input.customer.firstName,
+                lastName: input.customer.lastName,
+                email: input.customer.email || candidate.email,
+                updatedAt: new Date(),
+              })
+              .where(eq(customers.id, candidate.id));
+            break;
+          }
+        }
+      }
+
+      if (!customerId) {
         const [newCustomer] = await tx
           .insert(customers)
           .values({
@@ -573,7 +597,7 @@ export async function createBooking(
         customerId = newCustomer.id;
       }
 
-      // 9. Create appointment with visitor isolation scoping
+      // 12. Create appointment with visitor isolation scoping
       const referenceNumber = generateReferenceNumber();
 
       const [appointment] = await tx
@@ -592,7 +616,7 @@ export async function createBooking(
           customerNotes: input.customer.notes || null,
           adminNotes: input.adminNotes || null,
           isWalkIn: Boolean(input.isWalkIn),
-          visitorId: input.visitorId || null,
+          visitorId: input.visitorId ? input.visitorId.slice(0, 64) : null,
           isDemoSeed: false,
         })
         .returning({ id: appointments.id });
