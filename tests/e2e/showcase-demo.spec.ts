@@ -26,15 +26,40 @@ test.describe('Blush Studio — Showcase Customer & Management Journey', () => {
     const context1 = await browser.newContext();
     const page1 = await context1.newPage();
 
-    // 1. Visit homepage & verify showcase banner, hero imagery, guided demo, and Veltwo CTA
+    // 1. Visit homepage & verify showcase banner, hero imagery, guided demo, reference format, and Veltwo CTA
     await page1.goto('/');
     await expect(page1).toHaveTitle(/Blush Studio/);
     const banner = page1.locator('aside[aria-label="Demo notice"]');
     await expect(banner).toBeVisible();
     await expect(page1.locator('#guided-demo')).toBeVisible();
+    await expect(page1.locator('#guided-demo')).toContainText('BLS-YYYYMMDD-XXXX');
     await expect(page1.locator('a[href="https://www.facebook.com/veltwo/"]').first()).toBeVisible();
     const heroImgLoaded = await page1.locator('img').first().evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0);
     expect(heroImgLoaded).toBe(true);
+
+    // 1b. Verify clicking a homepage availability time slot carries serviceId, date, and time into the wizard
+    const homeSlotLink = page1.locator('a[href*="&time="]').first();
+    if (await homeSlotLink.isVisible().catch(() => false)) {
+      const href = (await homeSlotLink.getAttribute('href')) || '';
+      const urlParams = new URLSearchParams(href.split('?')[1] || '');
+      const expectedDate = urlParams.get('date');
+      const expectedTime = urlParams.get('time');
+
+      await Promise.all([
+        page1.waitForResponse((res) => res.url().includes('/api/booking/slots') && res.status() === 200),
+        homeSlotLink.click(),
+      ]);
+
+      await expect(page1.locator('h1')).toContainText('Select Date & Time');
+      if (expectedDate) {
+        await expect(page1.locator(`text=Showing open slots for ${expectedDate}`)).toBeVisible();
+      }
+      if (expectedTime) {
+        const preselectedSlotBtn = page1.locator(`button:has-text("${expectedTime}")`).first();
+        await expect(preselectedSlotBtn).toBeVisible();
+      }
+      await expect(page1.locator('button:has-text("Enter Guest Details")')).toBeEnabled();
+    }
 
     // 2. Navigate to Services & Select Service
     await page1.goto('/services');

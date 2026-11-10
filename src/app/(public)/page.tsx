@@ -156,7 +156,13 @@ export default async function HomePage() {
                       liveAvailability.slots.map((slot) => (
                         <Link
                           key={slot}
-                          href={heroService ? `/book?serviceId=${heroService.id}` : '/book'}
+                          href={
+                            heroService && liveAvailability.dateStr
+                              ? `/book?serviceId=${heroService.id}&date=${liveAvailability.dateStr}&time=${encodeURIComponent(slot)}`
+                              : heroService
+                              ? `/book?serviceId=${heroService.id}`
+                              : '/book'
+                          }
                           className="text-xs px-2.5 py-1 rounded bg-secondary text-foreground hover:bg-rose hover:text-white transition-colors font-medium"
                         >
                           {formatSlot12h(slot)}
@@ -168,7 +174,13 @@ export default async function HomePage() {
                       </span>
                     )}
                     <Link
-                      href={heroService ? `/book?serviceId=${heroService.id}` : '/book'}
+                      href={
+                        heroService && liveAvailability.dateStr
+                          ? `/book?serviceId=${heroService.id}&date=${liveAvailability.dateStr}`
+                          : heroService
+                          ? `/book?serviceId=${heroService.id}`
+                          : '/book'
+                      }
                       className="text-xs text-rose font-medium hover:underline ml-auto"
                     >
                       View all →
@@ -226,7 +238,7 @@ export default async function HomePage() {
                 Receive Reference Pass
               </h3>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Confirm your reservation to receive an instant <span className="font-mono text-foreground">BLS-YYYYMMDD</span> code tied privately to your browser session.
+                Confirm your reservation to receive an instant <span className="font-mono text-foreground">BLS-YYYYMMDD-XXXX</span> code tied privately to your browser session.
               </p>
             </div>
             <div className="space-y-2">

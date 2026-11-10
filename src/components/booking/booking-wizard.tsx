@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -53,6 +53,9 @@ export function BookingWizard({
   const router = useRouter();
   const searchParams = useSearchParams();
   const preselectedServiceId = searchParams.get('serviceId');
+  const preselectedDate = searchParams.get('date');
+  const preselectedTime = searchParams.get('time');
+  const pendingPreselectedTimeRef = useRef<string | null>(null);
 
   // Wizard Steps: 1: Service, 2: Staff, 3: Date/Time, 4: Customer, 5: Review, 6: Confirmation
   const [step, setStep] = useState<number>(1);
@@ -86,16 +89,26 @@ export function BookingWizard({
     staffName?: string;
   } | null>(null);
 
-  // Handle preselected service from query param
+  // Handle preselected service, date, and time from query params (e.g. homepage live availability links)
   useEffect(() => {
     if (preselectedServiceId) {
       const match = initialServices.find((s) => s.id === preselectedServiceId);
       if (match) {
         setSelectedService(match);
+        if (preselectedDate && /^\d{4}-\d{2}-\d{2}$/.test(preselectedDate)) {
+          setSelectedDate(preselectedDate);
+          if (preselectedTime && /^\d{2}:\d{2}$/.test(preselectedTime)) {
+            setSelectedStaff(null);
+            setNoPreference(true);
+            pendingPreselectedTimeRef.current = preselectedTime;
+            setStep(3);
+            return;
+          }
+        }
         setStep(2);
       }
     }
-  }, [preselectedServiceId, initialServices]);
+  }, [preselectedServiceId, preselectedDate, preselectedTime, initialServices]);
 
   // Load qualified staff when service is selected
   useEffect(() => {
@@ -147,7 +160,16 @@ export function BookingWizard({
           `/api/booking/slots?serviceId=${selectedService!.id}&staffId=${staffIdToQuery}&date=${selectedDate}`
         );
         const data = await res.json();
-        setAvailableSlots(data.slots || []);
+        const slots: string[] = data.slots || [];
+        setAvailableSlots(slots);
+
+        const pendingTime = pendingPreselectedTimeRef.current;
+        if (pendingTime) {
+          pendingPreselectedTimeRef.current = null;
+          if (slots.includes(pendingTime)) {
+            setSelectedSlot(pendingTime);
+          }
+        }
       } catch (err) {
         console.error('Failed to load slots:', err);
         setAvailableSlots([]);
