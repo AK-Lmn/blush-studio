@@ -4,6 +4,7 @@ import * as schema from '@/lib/db/schema';
 import { eq, or } from 'drizzle-orm';
 import { ReportCharts } from '@/components/admin/report-charts';
 import { formatPrice } from '@/lib/utils';
+import { calculateRevenueMetrics } from '@/lib/revenue';
 import { requireAdminSession, getAppointmentScopeCondition } from '@/lib/auth/admin-auth';
 
 export default async function AdminReportsPage() {
@@ -31,11 +32,11 @@ export default async function AdminReportsPage() {
     ? await query.where(scopeCondition)
     : await query;
 
-  // Group by category
+  // Group paid revenue by category (exclude cancelled and unpaid)
   const categoryMap = new Map<string, { revenue: number; count: number }>();
   for (const appt of appointments) {
     const existing = categoryMap.get(appt.categoryName) || { revenue: 0, count: 0 };
-    if (appt.status === 'completed' || appt.paymentStatus === 'paid') {
+    if (appt.paymentStatus === 'paid' && appt.status !== 'cancelled') {
       existing.revenue += appt.priceCentavos / 100;
     }
     existing.count += 1;
@@ -60,32 +61,53 @@ export default async function AdminReportsPage() {
     count,
   }));
 
-  const totalRevenueCentavos = appointments
-    .filter((a: any) => a.status === 'completed' || a.paymentStatus === 'paid')
-    .reduce((sum: number, a: any) => sum + a.priceCentavos, 0);
+  const {
+    paidRevenueCentavos,
+    paidCount,
+    unpaidTotalCentavos,
+    unpaidCount,
+  } = calculateRevenueMetrics(appointments);
 
   return (
     <div className="space-y-8">
       <div>
         <h1 className="font-serif text-2xl sm:text-3xl font-medium text-foreground tracking-tight">
-          Reports & Business Insights
+          Reports &amp; Business Insights
         </h1>
         <p className="text-xs sm:text-sm text-muted-foreground">
-          Real database analytics tracking service category performance and studio revenue.
+          Real database analytics tracking paid service category revenue and unpaid bookings separately.
         </p>
       </div>
 
-      <div className="bg-card rounded-xl border border-border p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div>
-          <span className="text-xs text-muted-foreground block font-medium">
-            Cumulative Recorded Revenue
-          </span>
-          <span className="text-3xl font-serif font-bold text-foreground">
-            {formatPrice(totalRevenueCentavos)}
-          </span>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4">
+          <div>
+            <span className="text-xs text-muted-foreground block font-medium">
+              Collected Revenue (Paid Only)
+            </span>
+            <span className="text-3xl font-serif font-bold text-foreground">
+              {formatPrice(paidRevenueCentavos)}
+            </span>
+          </div>
+          <div className="text-xs text-muted-foreground text-right">
+            <div>{paidCount} paid {paidCount === 1 ? 'appointment' : 'appointments'}</div>
+            <div className="text-[11px]">Across {appointments.length} total bookings</div>
+          </div>
         </div>
-        <div className="text-xs text-muted-foreground text-right">
-          Across {appointments.length} total customer bookings
+
+        <div className="bg-card rounded-xl border border-border p-6 flex items-center justify-between gap-4">
+          <div>
+            <span className="text-xs text-muted-foreground block font-medium">
+              Unpaid Bookings (Pending Settlement)
+            </span>
+            <span className="text-3xl font-serif font-bold text-amber-700">
+              {formatPrice(unpaidTotalCentavos)}
+            </span>
+          </div>
+          <div className="text-xs text-muted-foreground text-right">
+            <div>{unpaidCount} unpaid {unpaidCount === 1 ? 'booking' : 'bookings'}</div>
+            <div className="text-[11px]">Excluded from realized revenue</div>
+          </div>
         </div>
       </div>
 

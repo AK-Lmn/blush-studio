@@ -16,7 +16,7 @@ import {
   customers,
   services,
 } from '@/lib/db/schema';
-import { eq, and, ne, gte, lte, lt, or, sql, inArray } from 'drizzle-orm';
+import { eq, and, ne, gte, lte, lt, or, sql, inArray, asc } from 'drizzle-orm';
 import { generateReferenceNumber } from '@/lib/utils';
 
 const MANILA_TZ = 'Asia/Manila';
@@ -135,6 +135,123 @@ export async function getAvailableStaffForService(serviceId: string) {
 
 // ─── Get Available Time Slots ────────────────────────────────────────
 
+async function computeSlotsForStaffMember(params: {
+  serviceDurationMinutes: number;
+  staffId: string;
+  dateStr: string;
+  dayName: string;
+  bizHours: { openTime: string; closeTime: string };
+  settings: {
+    bookingIntervalMinutes: number;
+    bufferMinutes: number;
+    minAdvanceBookingHours: number;
+  };
+}): Promise<string[]> {
+  const { serviceDurationMinutes, staffId, dateStr, dayName, bizHours, settings } = params;
+  const interval = settings.bookingIntervalMinutes;
+  const buffer = settings.bufferMinutes;
+  const totalDuration = serviceDurationMinutes + buffer;
+
+  // Check staff schedule
+  const [staffSched] = await db
+    .select()
+    .from(staffSchedules)
+    .where(
+      and(
+        eq(staffSchedules.staffId, staffId),
+        eq(staffSchedules.dayOfWeek, dayName as any),
+        eq(staffSchedules.isActive, true)
+      )
+    );
+
+  if (!staffSched) {
+    return [];
+  }
+
+  // Working window calculation
+  const bizOpen = parseTime(bizHours.openTime);
+  const bizClose = parseTime(bizHours.closeTime);
+  const staffStart = parseTime(staffSched.startTime);
+  const staffEnd = parseTime(staffSched.endTime);
+
+  const startMinutes = Math.max(
+    bizOpen.hours * 60 + bizOpen.minutes,
+    staffStart.hours * 60 + staffStart.minutes
+  );
+  const endMinutes = Math.min(
+    bizClose.hours * 60 + bizClose.minutes,
+    staffEnd.hours * 60 + staffEnd.minutes
+  );
+
+  if (startMinutes >= endMinutes) {
+    return [];
+  }
+
+  // Check staff unavailability
+  const dayStart = createManilaDateTime(dateStr, '00:00');
+  const dayEnd = createManilaDateTime(dateStr, '23:59');
+
+  const unavailable = await db
+    .select()
+    .from(staffUnavailable)
+    .where(
+      and(
+        eq(staffUnavailable.staffId, staffId),
+        lte(staffUnavailable.startDate, dayEnd),
+        gte(staffUnavailable.endDate, dayStart)
+      )
+    );
+
+  if (unavailable.length > 0) {
+    return [];
+  }
+
+  // Existing booked appointments (non-cancelled)
+  const existingAppts = await db
+    .select({
+      startTime: appointments.startTime,
+      endTime: appointments.endTime,
+    })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.staffId, staffId),
+        ne(appointments.status, 'cancelled'),
+        gte(appointments.startTime, dayStart),
+        lt(appointments.startTime, addMinutes(dayEnd, 1))
+      )
+    );
+
+  // Minimum advance booking check
+  const now = new Date();
+  const minAdvance = addMinutes(now, settings.minAdvanceBookingHours * 60);
+
+  const slots: string[] = [];
+
+  for (let mins = startMinutes; mins + serviceDurationMinutes <= endMinutes; mins += interval) {
+    const hours = Math.floor(mins / 60);
+    const minutes = mins % 60;
+    const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+
+    const slotStart = createManilaDateTime(dateStr, timeStr);
+    const slotEnd = addMinutes(slotStart, totalDuration);
+
+    if (slotStart < minAdvance) continue;
+
+    const hasConflict = existingAppts.some((appt: any) => {
+      const apptStart = new Date(appt.startTime);
+      const apptEndWithBuffer = addMinutes(new Date(appt.endTime), buffer);
+      return slotStart < apptEndWithBuffer && slotEnd > apptStart;
+    });
+
+    if (!hasConflict) {
+      slots.push(timeStr);
+    }
+  }
+
+  return slots;
+}
+
 export async function getAvailableSlots(
   serviceId: string,
   staffId: string,
@@ -165,39 +282,8 @@ export async function getAvailableSlots(
     throw err;
   }
 
-  // 2. Verify staff exists and is active
-  const [staffMember] = await db
-    .select({ id: staff.id })
-    .from(staff)
-    .where(and(eq(staff.id, staffId), eq(staff.isActive, true)))
-    .limit(1);
-
-  if (!staffMember) {
-    const err = new Error('Staff member not found');
-    (err as any).statusCode = 404;
-    throw err;
-  }
-
-  // 3. Verify staff is qualified to perform this service
-  const [isQualified] = await db
-    .select({ id: staffServices.id })
-    .from(staffServices)
-    .where(and(eq(staffServices.staffId, staffId), eq(staffServices.serviceId, serviceId)))
-    .limit(1);
-
-  if (!isQualified) {
-    const err = new Error('Selected staff member cannot perform this service');
-    (err as any).statusCode = 400;
-    throw err;
-  }
-
-  // 4. Get business settings
+  // 2. Get business settings & check booking horizon
   const settings = await getBusinessSettings();
-  const interval = settings.bookingIntervalMinutes;
-  const buffer = settings.bufferMinutes;
-  const totalDuration = service.durationMinutes + buffer;
-
-  // 5. Booking horizon check
   const today = manilaToday();
   const [year, month, day] = dateStr.split('-').map(Number);
   const targetDate = new Date(year, month - 1, day);
@@ -213,7 +299,7 @@ export async function getAvailableSlots(
     return []; // Exceeds maximum booking window
   }
 
-  // 6. Check business hours
+  // 3. Check business hours once for the target date
   const dayName = getDayOfWeek(targetDate);
   const [bizHours] = await db
     .select()
@@ -224,105 +310,116 @@ export async function getAvailableSlots(
     return []; // Salon is closed on this day
   }
 
-  // 7. Check staff schedule
-  const [staffSched] = await db
-    .select()
-    .from(staffSchedules)
-    .where(
-      and(
-        eq(staffSchedules.staffId, staffId),
-        eq(staffSchedules.dayOfWeek, dayName as any),
-        eq(staffSchedules.isActive, true)
+  // 4a. "First Available Stylist": aggregate open slots across all qualified staff members
+  if (staffId === 'any') {
+    const qualifiedStaff = await getAvailableStaffForService(serviceId);
+    if (qualifiedStaff.length === 0) {
+      return [];
+    }
+
+    const perStaffSlots = await Promise.all(
+      qualifiedStaff.map((member: { id: string }) =>
+        computeSlotsForStaffMember({
+          serviceDurationMinutes: service.durationMinutes,
+          staffId: member.id,
+          dateStr,
+          dayName,
+          bizHours,
+          settings,
+        })
       )
     );
 
-  if (!staffSched) {
-    return []; // Staff member is not scheduled on this day
+    const uniqueSlots = new Set<string>();
+    for (const list of perStaffSlots) {
+      for (const slot of list) {
+        uniqueSlots.add(slot);
+      }
+    }
+
+    return Array.from(uniqueSlots).sort();
   }
 
-  // 8. Working window calculation
-  const bizOpen = parseTime(bizHours.openTime);
-  const bizClose = parseTime(bizHours.closeTime);
-  const staffStart = parseTime(staffSched.startTime);
-  const staffEnd = parseTime(staffSched.endTime);
+  // 4b. Specific stylist requested: verify existence & qualification
+  const [staffMember] = await db
+    .select({ id: staff.id })
+    .from(staff)
+    .where(and(eq(staff.id, staffId), eq(staff.isActive, true)))
+    .limit(1);
 
-  const startMinutes = Math.max(
-    bizOpen.hours * 60 + bizOpen.minutes,
-    staffStart.hours * 60 + staffStart.minutes
+  if (!staffMember) {
+    const err = new Error('Staff member not found');
+    (err as any).statusCode = 404;
+    throw err;
+  }
+
+  const [isQualified] = await db
+    .select({ id: staffServices.id })
+    .from(staffServices)
+    .where(and(eq(staffServices.staffId, staffId), eq(staffServices.serviceId, serviceId)))
+    .limit(1);
+
+  if (!isQualified) {
+    const err = new Error('Selected staff member cannot perform this service');
+    (err as any).statusCode = 400;
+    throw err;
+  }
+
+  return computeSlotsForStaffMember({
+    serviceDurationMinutes: service.durationMinutes,
+    staffId,
+    dateStr,
+    dayName,
+    bizHours,
+    settings,
+  });
+}
+
+/**
+ * Finds real upcoming availability across all qualified staff starting from Manila today.
+ * Used for displaying genuine live slot availability on the public homepage.
+ */
+export async function getNextAvailableAvailability(serviceId: string): Promise<{
+  dateStr: string | null;
+  dayLabel: string | null;
+  slots: string[];
+}> {
+  const nowManila = new Date(
+    new Date().toLocaleString('en-US', { timeZone: MANILA_TZ })
   );
-  const endMinutes = Math.min(
-    bizClose.hours * 60 + bizClose.minutes,
-    staffEnd.hours * 60 + staffEnd.minutes
-  );
 
-  if (startMinutes >= endMinutes) {
-    return [];
-  }
+  for (let offset = 0; offset < 4; offset++) {
+    const candidate = new Date(nowManila);
+    candidate.setDate(candidate.getDate() + offset);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const dateStr = `${candidate.getFullYear()}-${pad(candidate.getMonth() + 1)}-${pad(candidate.getDate())}`;
 
-  // 9. Check staff unavailability
-  const dayStart = createManilaDateTime(dateStr, '00:00');
-  const dayEnd = createManilaDateTime(dateStr, '23:59');
+    try {
+      const openSlots = await getAvailableSlots(serviceId, 'any', dateStr);
+      if (openSlots.length > 0) {
+        const dayLabel =
+          offset === 0
+            ? "Today's Availability"
+            : offset === 1
+            ? "Tomorrow's Availability"
+            : `Next Open (${candidate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`;
 
-  const unavailable = await db
-    .select()
-    .from(staffUnavailable)
-    .where(
-      and(
-        eq(staffUnavailable.staffId, staffId),
-        lte(staffUnavailable.startDate, dayEnd),
-        gte(staffUnavailable.endDate, dayStart)
-      )
-    );
-
-  if (unavailable.length > 0) {
-    return [];
-  }
-
-  // 10. Existing booked appointments (non-cancelled)
-  const existingAppts = await db
-    .select({
-      startTime: appointments.startTime,
-      endTime: appointments.endTime,
-    })
-    .from(appointments)
-    .where(
-      and(
-        eq(appointments.staffId, staffId),
-        ne(appointments.status, 'cancelled'),
-        gte(appointments.startTime, dayStart),
-        lt(appointments.startTime, addMinutes(dayEnd, 1))
-      )
-    );
-
-  // 11. Minimum advance booking check
-  const now = new Date();
-  const minAdvance = addMinutes(now, settings.minAdvanceBookingHours * 60);
-
-  // 12. Generate strictly valid slots
-  const slots: string[] = [];
-
-  for (let mins = startMinutes; mins + service.durationMinutes <= endMinutes; mins += interval) {
-    const hours = Math.floor(mins / 60);
-    const minutes = mins % 60;
-    const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-
-    const slotStart = createManilaDateTime(dateStr, timeStr);
-    const slotEnd = addMinutes(slotStart, totalDuration);
-
-    if (slotStart < minAdvance) continue;
-
-    const hasConflict = existingAppts.some((appt: any) => {
-      const apptStart = new Date(appt.startTime);
-      const apptEndWithBuffer = addMinutes(new Date(appt.endTime), buffer);
-      return slotStart < apptEndWithBuffer && slotEnd > apptStart;
-    });
-
-    if (!hasConflict) {
-      slots.push(timeStr);
+        return {
+          dateStr,
+          dayLabel,
+          slots: openSlots.slice(0, 3),
+        };
+      }
+    } catch {
+      // Ignore individual day lookup errors cleanly
     }
   }
 
-  return slots;
+  return {
+    dateStr: null,
+    dayLabel: null,
+    slots: [],
+  };
 }
 
 // ─── Centralized Create Booking ──────────────────────────────────────
@@ -351,21 +448,131 @@ export interface BookingResult {
   success: boolean;
   referenceNumber?: string;
   appointmentId?: string;
+  staffName?: string;
   error?: string;
+}
+
+async function verifyStaffSlotInTx(params: {
+  tx: any;
+  staffMember: { id: string; firstName: string; lastName: string };
+  date: string;
+  dayName: string;
+  dayStart: Date;
+  dayEnd: Date;
+  bizHours: { openTime: string; closeTime: string };
+  apptStartMinutes: number;
+  apptEndMinutes: number;
+  startWithBuffer: Date;
+  endWithBuffer: Date;
+}): Promise<{ available: boolean; error?: string }> {
+  const {
+    tx,
+    staffMember,
+    date,
+    dayName,
+    dayStart,
+    dayEnd,
+    bizHours,
+    apptStartMinutes,
+    apptEndMinutes,
+    startWithBuffer,
+    endWithBuffer,
+  } = params;
+
+  // Acquire per-staff+date advisory lock inside transaction to prevent double-booking
+  if (!process.env.VITEST) {
+    const lockKey = staffDateLockKey(staffMember.id, date);
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
+  }
+
+  // Verify staff is scheduled to work on this day
+  const [staffSched] = await tx
+    .select()
+    .from(staffSchedules)
+    .where(
+      and(
+        eq(staffSchedules.staffId, staffMember.id),
+        eq(staffSchedules.dayOfWeek, dayName as any),
+        eq(staffSchedules.isActive, true)
+      )
+    );
+
+  if (!staffSched) {
+    return {
+      available: false,
+      error: `${staffMember.firstName} is not scheduled to work on this day`,
+    };
+  }
+
+  // Verify staff is not on leave / unavailable
+  const unavailable = await tx
+    .select()
+    .from(staffUnavailable)
+    .where(
+      and(
+        eq(staffUnavailable.staffId, staffMember.id),
+        lte(staffUnavailable.startDate, dayEnd),
+        gte(staffUnavailable.endDate, dayStart)
+      )
+    );
+
+  if (unavailable.length > 0) {
+    return {
+      available: false,
+      error: `${staffMember.firstName} is unavailable or on leave on this date`,
+    };
+  }
+
+  // Verify appointment fits entirely within working hours window
+  const bizOpen = parseTime(bizHours.openTime);
+  const bizClose = parseTime(bizHours.closeTime);
+  const staffStart = parseTime(staffSched.startTime);
+  const staffEnd = parseTime(staffSched.endTime);
+
+  const windowStartMinutes = Math.max(
+    bizOpen.hours * 60 + bizOpen.minutes,
+    staffStart.hours * 60 + staffStart.minutes
+  );
+  const windowEndMinutes = Math.min(
+    bizClose.hours * 60 + bizClose.minutes,
+    staffEnd.hours * 60 + staffEnd.minutes
+  );
+
+  if (apptStartMinutes < windowStartMinutes || apptEndMinutes > windowEndMinutes) {
+    return {
+      available: false,
+      error: 'The requested appointment falls outside active working hours',
+    };
+  }
+
+  // Verify no conflicting appointments exist for this staff member (with buffers)
+  const conflicts = await tx
+    .select({ id: appointments.id })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.staffId, staffMember.id),
+        ne(appointments.status, 'cancelled'),
+        lt(appointments.startTime, endWithBuffer),
+        gte(appointments.endTime, startWithBuffer)
+      )
+    );
+
+  if (conflicts.length > 0) {
+    return {
+      available: false,
+      error: 'This time slot is no longer available. Please select another time.',
+    };
+  }
+
+  return { available: true };
 }
 
 export async function createBooking(
   input: CreateBookingInput
 ): Promise<BookingResult> {
-  const lockKey = staffDateLockKey(input.staffId, input.date);
-
   try {
     const result = await db.transaction(async (tx: any) => {
-      // Concurrency lock: postgres advisory lock per staff+date
-      if (!process.env.VITEST) {
-        await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
-      }
-
       // 1. Verify service exists and is active
       const [service] = await tx
         .select()
@@ -376,42 +583,14 @@ export async function createBooking(
         return { success: false, error: 'Service is no longer available' };
       }
 
-      // 2. Verify staff exists, is active, and can perform this service
-      const [staffMember] = await tx
-        .select()
-        .from(staff)
-        .where(and(eq(staff.id, input.staffId), eq(staff.isActive, true)));
-
-      if (!staffMember) {
-        return { success: false, error: 'Staff member is not available' };
-      }
-
-      const [staffService] = await tx
-        .select()
-        .from(staffServices)
-        .where(
-          and(
-            eq(staffServices.staffId, input.staffId),
-            eq(staffServices.serviceId, input.serviceId)
-          )
-        );
-
-      if (!staffService) {
-        return {
-          success: false,
-          error: 'This staff member cannot perform the selected service',
-        };
-      }
-
-      // 3. Get business settings
+      // 2. Get business settings & compute appointment times
       const [settings] = await tx.select().from(businessSettings).limit(1);
       const buffer = settings?.bufferMinutes ?? 10;
 
-      // 4. Calculate appointment times
       const startTime = createManilaDateTime(input.date, input.time);
       const endTime = addMinutes(startTime, service.durationMinutes);
 
-      // 5. Booking horizon & advance booking constraints (authoritative check before schedule)
+      // 3. Booking horizon & advance booking constraints
       const now = new Date();
       if (!input.isWalkIn) {
         const minAdvanceHours = settings?.minAdvanceBookingHours ?? 2;
@@ -435,7 +614,7 @@ export async function createBooking(
         }
       }
 
-      // 6. Verify business hours
+      // 4. Verify business hours
       const [year, month, day] = input.date.split('-').map(Number);
       const dateObj = new Date(year, month - 1, day);
       const dayName = getDayOfWeek(dateObj);
@@ -449,97 +628,116 @@ export async function createBooking(
         return { success: false, error: 'The salon is closed on this day' };
       }
 
-      // 7. Verify staff is scheduled to work on this day
-      const [staffSched] = await tx
-        .select()
-        .from(staffSchedules)
-        .where(
-          and(
-            eq(staffSchedules.staffId, input.staffId),
-            eq(staffSchedules.dayOfWeek, dayName as any),
-            eq(staffSchedules.isActive, true)
-          )
-        );
-
-      if (!staffSched) {
-        return {
-          success: false,
-          error: `${staffMember.firstName} is not scheduled to work on this day`,
-        };
-      }
-
-      // 8. Verify staff is not on leave / unavailable
       const dayStart = createManilaDateTime(input.date, '00:00');
       const dayEnd = createManilaDateTime(input.date, '23:59');
-
-      const unavailable = await tx
-        .select()
-        .from(staffUnavailable)
-        .where(
-          and(
-            eq(staffUnavailable.staffId, input.staffId),
-            lte(staffUnavailable.startDate, dayEnd),
-            gte(staffUnavailable.endDate, dayStart)
-          )
-        );
-
-      if (unavailable.length > 0) {
-        return {
-          success: false,
-          error: `${staffMember.firstName} is unavailable or on leave on this date`,
-        };
-      }
-
-      // 9. Verify appointment fits entirely within working hours window
-      const bizOpen = parseTime(bizHours.openTime);
-      const bizClose = parseTime(bizHours.closeTime);
-      const staffStart = parseTime(staffSched.startTime);
-      const staffEnd = parseTime(staffSched.endTime);
-
-      const windowStartMinutes = Math.max(
-        bizOpen.hours * 60 + bizOpen.minutes,
-        staffStart.hours * 60 + staffStart.minutes
-      );
-      const windowEndMinutes = Math.min(
-        bizClose.hours * 60 + bizClose.minutes,
-        staffEnd.hours * 60 + staffEnd.minutes
-      );
-
       const apptStartParsed = parseTime(input.time);
       const apptStartMinutes = apptStartParsed.hours * 60 + apptStartParsed.minutes;
       const apptEndMinutes = apptStartMinutes + service.durationMinutes;
-
-      if (apptStartMinutes < windowStartMinutes || apptEndMinutes > windowEndMinutes) {
-        return {
-          success: false,
-          error: 'The requested appointment falls outside active working hours',
-        };
-      }
-
-      // 10. Verify no conflicting appointments exist for this staff member (with buffers)
       const startWithBuffer = addMinutes(startTime, -buffer);
       const endWithBuffer = addMinutes(endTime, buffer);
 
-      const conflicts = await tx
-        .select({ id: appointments.id })
-        .from(appointments)
-        .where(
-          and(
-            eq(appointments.staffId, input.staffId),
-            ne(appointments.status, 'cancelled'),
-            lt(appointments.startTime, endWithBuffer),
-            gte(appointments.endTime, startWithBuffer)
-          )
-        );
+      // 5. Resolve qualified stylist (single specific stylist OR first available across all qualified staff)
+      let assignedStaff: { id: string; firstName: string; lastName: string } | null = null;
 
-      if (conflicts.length > 0) {
-        return {
-          success: false,
-          error: 'This time slot is no longer available. Please select another time.',
-        };
+      if (input.staffId === 'any') {
+        const qualifiedCandidates = await tx
+          .select({
+            id: staff.id,
+            firstName: staff.firstName,
+            lastName: staff.lastName,
+          })
+          .from(staff)
+          .innerJoin(staffServices, eq(staffServices.staffId, staff.id))
+          .where(and(eq(staffServices.serviceId, input.serviceId), eq(staff.isActive, true)))
+          .orderBy(asc(staff.id));
+
+        if (qualifiedCandidates.length === 0) {
+          return { success: false, error: 'No qualified staff members are available for this service' };
+        }
+
+        for (const candidate of qualifiedCandidates) {
+          const check = await verifyStaffSlotInTx({
+            tx,
+            staffMember: candidate,
+            date: input.date,
+            dayName,
+            dayStart,
+            dayEnd,
+            bizHours,
+            apptStartMinutes,
+            apptEndMinutes,
+            startWithBuffer,
+            endWithBuffer,
+          });
+          if (check.available) {
+            assignedStaff = candidate;
+            break;
+          }
+        }
+
+        if (!assignedStaff) {
+          return {
+            success: false,
+            error: 'No qualified stylists are available for this time slot. Please select another time.',
+          };
+        }
+      } else {
+        const [staffMember] = await tx
+          .select({
+            id: staff.id,
+            firstName: staff.firstName,
+            lastName: staff.lastName,
+          })
+          .from(staff)
+          .where(and(eq(staff.id, input.staffId), eq(staff.isActive, true)));
+
+        if (!staffMember) {
+          return { success: false, error: 'Staff member is not available' };
+        }
+
+        const [staffService] = await tx
+          .select()
+          .from(staffServices)
+          .where(
+            and(
+              eq(staffServices.staffId, input.staffId),
+              eq(staffServices.serviceId, input.serviceId)
+            )
+          );
+
+        if (!staffService) {
+          return {
+            success: false,
+            error: 'This staff member cannot perform the selected service',
+          };
+        }
+
+        const check = await verifyStaffSlotInTx({
+          tx,
+          staffMember,
+          date: input.date,
+          dayName,
+          dayStart,
+          dayEnd,
+          bizHours,
+          apptStartMinutes,
+          apptEndMinutes,
+          startWithBuffer,
+          endWithBuffer,
+        });
+
+        if (!check.available) {
+          return { success: false, error: check.error };
+        }
+
+        assignedStaff = staffMember;
       }
 
-      // 11. Find or create customer (isolated by visitor session)
+      if (!assignedStaff) {
+        return { success: false, error: 'No qualified stylist is available for this slot.' };
+      }
+
+      // 6. Find or create customer (isolated by visitor session)
       // Never overwrite seeded baseline customers or other visitors' customer records
       let customerId: string | null = null;
       const normalizedPhone = input.customer.phone.replace(/[\s\-()]/g, '');
@@ -597,7 +795,7 @@ export async function createBooking(
         customerId = newCustomer.id;
       }
 
-      // 12. Create appointment with visitor isolation scoping
+      // 7. Create appointment with visitor isolation scoping
       const referenceNumber = generateReferenceNumber();
 
       const [appointment] = await tx
@@ -606,7 +804,7 @@ export async function createBooking(
           referenceNumber,
           customerId,
           serviceId: input.serviceId,
-          staffId: input.staffId,
+          staffId: assignedStaff.id,
           startTime,
           endTime,
           status: input.status || 'pending',
@@ -625,6 +823,7 @@ export async function createBooking(
         success: true,
         referenceNumber,
         appointmentId: appointment.id,
+        staffName: `${assignedStaff.firstName} ${assignedStaff.lastName}`,
       };
     });
 

@@ -26,11 +26,15 @@ test.describe('Blush Studio — Showcase Customer & Management Journey', () => {
     const context1 = await browser.newContext();
     const page1 = await context1.newPage();
 
-    // 1. Visit homepage & verify showcase banner
+    // 1. Visit homepage & verify showcase banner, hero imagery, guided demo, and Veltwo CTA
     await page1.goto('/');
     await expect(page1).toHaveTitle(/Blush Studio/);
     const banner = page1.locator('aside[aria-label="Demo notice"]');
     await expect(banner).toBeVisible();
+    await expect(page1.locator('#guided-demo')).toBeVisible();
+    await expect(page1.locator('a[href="https://www.facebook.com/veltwo/"]').first()).toBeVisible();
+    const heroImgLoaded = await page1.locator('img').first().evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0);
+    expect(heroImgLoaded).toBe(true);
 
     // 2. Navigate to Services & Select Service
     await page1.goto('/services');
@@ -76,8 +80,9 @@ test.describe('Blush Studio — Showcase Customer & Management Journey', () => {
     await expect(enterGuestDetailsBtn).toBeEnabled();
     await enterGuestDetailsBtn.click();
 
-    // 5. Wizard Step 4: Use Demo Customer Quick-Fill
+    // 5. Wizard Step 4: Prominent Privacy Notice & Use Demo Customer Quick-Fill
     await expect(page1.locator('h1')).toContainText('Guest Information');
+    await expect(page1.locator('text=do not enter your real personal')).toBeVisible();
     const useDemoCustomerBtn = page1.locator('button:has-text("Use Demo Customer")');
     await expect(useDemoCustomerBtn).toBeVisible();
     await useDemoCustomerBtn.click();
@@ -129,6 +134,8 @@ test.describe('Blush Studio — Showcase Customer & Management Journey', () => {
 
     await expect(page1).toHaveURL('/admin', { timeout: 10000 });
     await expect(page1.locator('text=Veltwo Showcase Mode')).toBeVisible();
+    await expect(page1.locator('text=Paid Revenue').first()).toBeVisible();
+    await expect(page1.locator('text=Unpaid Bookings').first()).toBeVisible();
 
     // 10. Dashboard recognition: Visitor 1 sees their booking in the management table
     await page1.goto('/admin/appointments');

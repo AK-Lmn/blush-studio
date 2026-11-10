@@ -98,29 +98,42 @@ export default async function ServicesPage({
         {filteredServices.map((service: any) => (
           <div
             key={service.id}
-            className="group bg-card rounded-xl border border-border p-6 flex flex-col justify-between hover:border-rose/50 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200"
+            className="group bg-card rounded-2xl border border-border overflow-hidden flex flex-col justify-between hover:border-rose/50 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200"
           >
-            <div className="space-y-4">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs uppercase tracking-wider text-rose font-medium">
-                  {service.categoryName}
-                </span>
-                <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>{formatDuration(service.durationMinutes)}</span>
-                </span>
+            <div>
+              {service.imageUrl && (
+                <div className="aspect-4/3 w-full overflow-hidden bg-secondary border-b border-border/60">
+                  <img
+                    src={service.imageUrl}
+                    alt={service.name}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    loading="lazy"
+                  />
+                </div>
+              )}
+
+              <div className="p-6 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs uppercase tracking-wider text-rose font-medium">
+                    {service.categoryName}
+                  </span>
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>{formatDuration(service.durationMinutes)}</span>
+                  </span>
+                </div>
+
+                <h2 className="font-serif text-xl font-medium text-foreground group-hover:text-rose transition-colors">
+                  {service.name}
+                </h2>
+
+                <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed line-clamp-3">
+                  {service.description}
+                </p>
               </div>
-
-              <h2 className="font-serif text-xl font-medium text-foreground group-hover:text-rose transition-colors">
-                {service.name}
-              </h2>
-
-              <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed line-clamp-4">
-                {service.description}
-              </p>
             </div>
 
-            <div className="pt-6 mt-6 border-t border-border flex items-center justify-between">
+            <div className="px-6 pb-6 pt-4 mx-0 border-t border-border flex items-center justify-between bg-card">
               <div>
                 <span className="text-xs text-muted-foreground block">Starting at</span>
                 <span className="text-lg font-serif font-bold text-foreground">

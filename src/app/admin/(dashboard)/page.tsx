@@ -6,6 +6,7 @@ import { eq, desc, gte, lt, sql, and, ne } from 'drizzle-orm';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatPrice, formatDuration, formatPhoneNumber } from '@/lib/utils';
+import { calculateRevenueMetrics } from '@/lib/revenue';
 import {
   CalendarCheck2,
   Clock,
@@ -16,6 +17,7 @@ import {
   XCircle,
   ArrowRight,
   Plus,
+  Wallet,
 } from 'lucide-react';
 
 
@@ -70,9 +72,12 @@ export default async function AdminDashboardOverview() {
   const completedCount = allAppointments.filter((a: any) => a.status === 'completed').length;
   const cancelledCount = allAppointments.filter((a: any) => a.status === 'cancelled').length;
 
-  const estimatedRevenueCentavos = allAppointments
-    .filter((a: any) => a.status === 'completed' || a.paymentStatus === 'paid')
-    .reduce((sum: number, a: any) => sum + a.priceCentavos, 0);
+  const {
+    paidRevenueCentavos,
+    paidCount,
+    unpaidTotalCentavos,
+    unpaidCount,
+  } = calculateRevenueMetrics(allAppointments);
 
   const recentBookings = allAppointments.slice(0, 5);
 
@@ -90,7 +95,7 @@ export default async function AdminDashboardOverview() {
             Studio Dashboard Overview
           </h1>
           <p className="text-xs sm:text-sm text-muted-foreground">
-            Live business activity, client appointments, and service revenue.
+            Live business activity, client appointments, and collected service revenue.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -147,19 +152,48 @@ export default async function AdminDashboardOverview() {
           </p>
         </div>
 
-        {/* Estimated Revenue */}
+        {/* Collected Revenue (Paid Only) */}
         <div className="bg-card rounded-xl border border-border p-5 space-y-2">
           <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">Realized Revenue</span>
+            <span className="text-xs font-medium">Paid Revenue</span>
             <TrendingUp className="w-4 h-4 text-emerald-600" />
           </div>
           <div className="text-2xl sm:text-3xl font-serif font-bold text-foreground">
-            {formatPrice(estimatedRevenueCentavos)}
+            {formatPrice(paidRevenueCentavos)}
           </div>
           <p className="text-[11px] text-muted-foreground">
-            From paid & completed visits
+            From {paidCount} paid {paidCount === 1 ? 'appointment' : 'appointments'}
           </p>
         </div>
+      </div>
+
+      {/* Unpaid Bookings Breakdown (Tracked Separately from Paid Revenue) */}
+      <div className="bg-card rounded-xl border border-border px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-amber-50 border border-amber-200/80 text-amber-700 flex items-center justify-center shrink-0">
+            <Wallet className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs sm:text-sm font-semibold text-foreground">
+                Unpaid Bookings
+              </span>
+              <Badge variant="outline" className="text-[11px] text-amber-700 border-amber-300 bg-amber-50">
+                {unpaidCount} pending settlement
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Total unpaid balance across active appointments: <strong className="text-foreground">{formatPrice(unpaidTotalCentavos)}</strong> (excluded from Paid Revenue).
+            </p>
+          </div>
+        </div>
+        <Link
+          href="/admin/appointments"
+          className="text-xs text-rose hover:underline font-medium flex items-center gap-1 shrink-0"
+        >
+          <span>Review Unpaid Bookings</span>
+          <ArrowRight className="w-3.5 h-3.5" />
+        </Link>
       </div>
 
       {/* Two Column Layout: Upcoming Schedule & Recent Bookings */}

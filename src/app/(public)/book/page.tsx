@@ -24,6 +24,7 @@ export default async function BookPage() {
       description: schema.services.description,
       priceCentavos: schema.services.priceCentavos,
       durationMinutes: schema.services.durationMinutes,
+      imageUrl: schema.services.imageUrl,
       categoryName: schema.serviceCategories.name,
     })
     .from(schema.services)

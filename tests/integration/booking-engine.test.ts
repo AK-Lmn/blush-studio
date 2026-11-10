@@ -366,4 +366,69 @@ describe('Booking Engine Integration & Concurrency Tests', () => {
       .where(eq(schema.customers.id, appt1.customerId));
     expect(cust1.firstName).toBe('VisitorOneName');
   });
+
+  it('aggregates First Available Stylist ("any") across all qualified staff members', async () => {
+    const qualified = await getAvailableStaffForService(testServiceId);
+    expect(qualified.length).toBeGreaterThanOrEqual(2);
+
+    const { dateStr, slots } = await findWorkingDateWithSlots(2, 16);
+    const chosenSlot = slots[0];
+
+    // Check which qualified stylists are free at chosenSlot
+    const freeStylists: string[] = [];
+    for (const member of qualified) {
+      const s = await getAvailableSlots(testServiceId, member.id, dateStr);
+      if (s.includes(chosenSlot)) {
+        freeStylists.push(member.id);
+      }
+    }
+    expect(freeStylists.length).toBeGreaterThanOrEqual(2);
+
+    // Book ALL but the last free stylist on that exact slot
+    for (let i = 0; i < freeStylists.length - 1; i++) {
+      const preBook = await createBooking({
+        serviceId: testServiceId,
+        staffId: freeStylists[i],
+        date: dateStr,
+        time: chosenSlot,
+        customer: {
+          firstName: `PreBook${i}`,
+          lastName: 'Blocker',
+          phone: `0917222111${i}`,
+        },
+        visitorId: `vst_prebook_${i}`,
+      });
+      expect(preBook.success).toBe(true);
+    }
+
+    // "any" must STILL find chosenSlot available because the last qualified stylist is free
+    const aggregatedSlots = await getAvailableSlots(testServiceId, 'any', dateStr);
+    expect(aggregatedSlots).toContain(chosenSlot);
+
+    // Booking with staffId='any' must automatically assign the remaining available stylist
+    const anyBooking = await createBooking({
+      serviceId: testServiceId,
+      staffId: 'any',
+      date: dateStr,
+      time: chosenSlot,
+      customer: {
+        firstName: 'Flex',
+        lastName: 'Guest',
+        phone: '09179994444',
+      },
+      visitorId: 'vst_flex_guest',
+    });
+    expect(anyBooking.success).toBe(true);
+    expect(anyBooking.staffName).toBeTruthy();
+
+    const [bookedAppt] = await db
+      .select()
+      .from(schema.appointments)
+      .where(eq(schema.appointments.id, anyBooking.appointmentId!));
+    expect(bookedAppt.staffId).toBe(freeStylists[freeStylists.length - 1]);
+
+    // Now that ALL qualified stylists are booked on chosenSlot, "any" must no longer include chosenSlot
+    const afterSlots = await getAvailableSlots(testServiceId, 'any', dateStr);
+    expect(afterSlots).not.toContain(chosenSlot);
+  });
 });

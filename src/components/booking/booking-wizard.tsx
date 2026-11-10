@@ -31,6 +31,7 @@ interface Service {
   description: string | null;
   priceCentavos: number;
   durationMinutes: number;
+  imageUrl?: string | null;
   categoryName?: string;
 }
 
@@ -82,6 +83,7 @@ export function BookingWizard({
   const [confirmedBooking, setConfirmedBooking] = useState<{
     referenceNumber: string;
     appointmentId: string;
+    staffName?: string;
   } | null>(null);
 
   // Handle preselected service from query param
@@ -117,19 +119,19 @@ export function BookingWizard({
     fetchStaff();
   }, [selectedService]);
 
-  // Generate next 14 bookable days
+  // Generate next 21 bookable days anchored to Manila time (YYYY-MM-DD)
   const bookableDates: Array<{ dateStr: string; label: string; sublabel: string }> = [];
   const today = new Date();
   for (let i = 0; i < 21; i++) {
     const d = new Date(today);
     d.setDate(d.getDate() + i);
-    const dateStr = d.toISOString().slice(0, 10);
-    const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
-    const monthDay = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const dateStr = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+    const dayName = d.toLocaleDateString('en-US', { timeZone: 'Asia/Manila', weekday: 'short' });
+    const monthDay = d.toLocaleDateString('en-US', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric' });
     bookableDates.push({ dateStr, label: dayName, sublabel: monthDay });
   }
 
-  // Load available time slots when staff + date are chosen
+  // Load available time slots across selected stylist or ALL qualified stylists ("any")
   useEffect(() => {
     if (!selectedService || (!selectedStaff && !noPreference) || !selectedDate) {
       return;
@@ -139,12 +141,7 @@ export function BookingWizard({
       setLoadingSlots(true);
       setSelectedSlot('');
       try {
-        const staffIdToQuery = selectedStaff ? selectedStaff.id : availableStaff[0]?.id;
-        if (!staffIdToQuery) {
-          setAvailableSlots([]);
-          setLoadingSlots(false);
-          return;
-        }
+        const staffIdToQuery = selectedStaff ? selectedStaff.id : 'any';
 
         const res = await fetch(
           `/api/booking/slots?serviceId=${selectedService!.id}&staffId=${staffIdToQuery}&date=${selectedDate}`
@@ -160,7 +157,7 @@ export function BookingWizard({
     }
 
     loadSlots();
-  }, [selectedService, selectedStaff, noPreference, selectedDate, availableStaff]);
+  }, [selectedService, selectedStaff, noPreference, selectedDate]);
 
   // Autofill fictional demo customer information
   const handleFillDemoCustomer = () => {
@@ -189,7 +186,7 @@ export function BookingWizard({
 
     setSubmitting(true);
     try {
-      const activeStaffId = selectedStaff ? selectedStaff.id : availableStaff[0]?.id;
+      const activeStaffId = selectedStaff ? selectedStaff.id : 'any';
 
       const payload = {
         serviceId: selectedService.id,
@@ -310,35 +307,49 @@ export function BookingWizard({
                       setSelectedService(service);
                     }
                   }}
-                  className={`p-5 rounded-xl border text-left cursor-pointer transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background ${
+                  className={`p-4 sm:p-5 rounded-xl border text-left cursor-pointer transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background flex gap-4 items-start ${
                     isSelected
                       ? 'border-rose bg-secondary/30 ring-2 ring-rose/30 shadow-xs -translate-y-0.5'
                       : 'border-border bg-card hover:border-rose/50 hover:-translate-y-0.5 hover:shadow-md'
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <h3 className="font-serif text-base font-semibold text-foreground">
-                      {service.name}
-                    </h3>
-                    <span className="font-serif font-bold text-sm text-foreground whitespace-nowrap">
-                      {formatPrice(service.priceCentavos)}
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2 mb-4">
-                    {service.description}
-                  </p>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5" />
-                      <span>{formatDuration(service.durationMinutes)}</span>
-                    </span>
-                    <span
-                      className={`text-xs font-semibold ${
-                        isSelected ? 'text-rose' : 'text-muted-foreground'
-                      }`}
-                    >
-                      {isSelected ? '✓ Selected' : 'Select →'}
-                    </span>
+                  {service.imageUrl && (
+                    <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg overflow-hidden bg-secondary border border-border/60 shrink-0">
+                      <img
+                        src={service.imageUrl}
+                        alt={service.name}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-start justify-between gap-2 mb-1.5">
+                        <h3 className="font-serif text-base font-semibold text-foreground leading-snug">
+                          {service.name}
+                        </h3>
+                        <span className="font-serif font-bold text-sm text-foreground whitespace-nowrap">
+                          {formatPrice(service.priceCentavos)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2 mb-3">
+                        {service.description}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>{formatDuration(service.durationMinutes)}</span>
+                      </span>
+                      <span
+                        className={`text-xs font-semibold ${
+                          isSelected ? 'text-rose' : 'text-muted-foreground'
+                        }`}
+                      >
+                        {isSelected ? '✓ Selected' : 'Select →'}
+                      </span>
+                    </div>
                   </div>
                 </div>
               );
@@ -594,25 +605,25 @@ export function BookingWizard({
             </p>
           </div>
 
-          {/* Quick Demo Customer Autofill Banner */}
-          <div className="p-4 rounded-xl bg-secondary/70 border border-rose/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-            <div className="space-y-0.5 text-left">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                <Sparkles className="w-3.5 h-3.5 text-rose shrink-0" />
-                <span>Visiting as a prospective client?</span>
+          {/* Prominent Demo Customer Autofill & Privacy Notice */}
+          <div className="p-5 sm:p-6 rounded-2xl bg-secondary border-2 border-rose/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm">
+            <div className="space-y-1.5 text-left">
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <ShieldCheck className="w-4 h-4 text-rose shrink-0" />
+                <span>Recommended: Autofill Safe Demo Details</span>
               </div>
-              <p className="text-[11px] text-muted-foreground">
-                Skip typing personal details. Click to autofill safe, realistic demonstration guest info.
+              <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
+                Please <strong className="font-semibold text-foreground">do not enter your real personal phone number or email</strong> — this is a public portfolio demonstration. Click the button to populate fictional guest details instantly.
               </p>
             </div>
             <Button
               type="button"
               variant="blush"
-              size="sm"
+              size="lg"
               onClick={handleFillDemoCustomer}
-              className="shrink-0 gap-1.5 text-xs font-semibold h-8.5 px-3.5"
+              className="w-full sm:w-auto shrink-0 gap-2 text-sm font-semibold px-5 shadow-xs"
             >
-              <User className="w-3.5 h-3.5" />
+              <User className="w-4 h-4" />
               <span>Use Demo Customer</span>
             </Button>
           </div>
@@ -866,24 +877,43 @@ export function BookingWizard({
           </div>
 
           {/* Reference badge */}
-          <div className="bg-secondary/60 rounded-xl p-4 border border-border inline-block max-w-sm mx-auto">
-            <span className="text-xs text-muted-foreground block mb-1">
+          <div className="bg-secondary/60 rounded-xl p-4 border border-border inline-block max-w-sm mx-auto space-y-1">
+            <span className="text-xs text-muted-foreground block">
               Booking Reference Number
             </span>
-            <span className="font-mono text-xl font-bold text-foreground tracking-wider">
+            <span className="font-mono text-xl font-bold text-foreground tracking-wider block">
               {confirmedBooking.referenceNumber}
             </span>
+            {confirmedBooking.staffName && (
+              <span className="text-xs text-muted-foreground block pt-1">
+                Matched Stylist: <strong className="text-foreground">{confirmedBooking.staffName}</strong>
+              </span>
+            )}
           </div>
 
-          <div className="p-4 rounded-xl bg-secondary/50 border border-border text-xs text-muted-foreground max-w-md mx-auto space-y-2 text-center">
-            <p className="font-semibold text-foreground">
-              ✨ Fictional Portfolio Demonstration
+          <div className="p-5 rounded-xl bg-secondary/50 border border-border text-xs text-muted-foreground max-w-lg mx-auto space-y-2.5 text-left">
+            <p className="font-semibold text-foreground text-center">
+              Next Step in the Guided Demo
             </p>
-            <p>
-              This is an interactive showcase built by Veltwo Studio. No real appointment or payment will be processed.
-            </p>
-            <p className="text-[11px]">
-              You can now look up your booking details or log into the Admin Portal as Demo Manager to see your reservation appear live on the appointment schedule.
+            <ol className="list-decimal list-inside space-y-1.5 leading-relaxed">
+              <li>
+                Open <strong className="text-foreground">Explore in Admin Portal</strong> below and click <strong className="text-foreground">&ldquo;Explore Demo as Manager&rdquo;</strong>.
+              </li>
+              <li>
+                Visit <strong className="text-foreground">Appointments</strong> or <strong className="text-foreground">Calendar</strong> to find reference <span className="font-mono font-semibold text-foreground">{confirmedBooking.referenceNumber}</span> live in your studio schedule.
+              </li>
+            </ol>
+            <p className="text-[11px] pt-1 border-t border-border/60 text-center">
+              Demo built by{' '}
+              <a
+                href="https://www.facebook.com/veltwo/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-rose hover:underline"
+              >
+                Veltwo Studio
+              </a>
+              {' '}— no real payment or salon booking occurs.
             </p>
           </div>
 

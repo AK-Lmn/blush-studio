@@ -23,7 +23,7 @@ export const bookingCustomerSchema = z.object({
 
 export const bookingSchema = z.object({
   serviceId: z.string().uuid('Select a service'),
-  staffId: z.string().uuid('Select a staff member'),
+  staffId: z.string().uuid('Select a staff member').or(z.literal('any')),
   date: z.string().min(1, 'Select a date'),
   time: z.string().min(1, 'Select a time'),
   customer: bookingCustomerSchema,

@@ -23,12 +23,17 @@ export default async function AdminDashboardLayout({
               <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-rose shrink-0" />
                 <span>
-                  <strong className="font-semibold">Veltwo Showcase Mode:</strong> You are exploring the management portal with safe demo permissions. You can view reports, schedules, and test appointment status updates.
+                  <strong className="font-semibold">Veltwo Showcase Mode:</strong> Any appointment you booked on the website appears live in <strong className="font-semibold">Appointments</strong> &amp; <strong className="font-semibold">Calendar</strong> — test confirming bookings or marking payments as Paid.
                 </span>
               </div>
-              <span className="text-[11px] font-mono text-muted-foreground shrink-0">
-                Visitor: {session.visitorId.slice(0, 12)}
-              </span>
+              <a
+                href="https://www.facebook.com/veltwo/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-semibold text-rose hover:underline shrink-0"
+              >
+                Want a custom system? Veltwo Studio →
+              </a>
             </div>
           )}
           {children}
